@@ -20,12 +20,14 @@ import {
   FINALITY_THRESHOLD_FAST,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_POLL_TIMEOUT_MS,
+  FAST_TRANSFER_ESTIMATED_DURATION_SECONDS,
 } from "./constants.js";
 import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
 import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
 import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
 import { decodeCctpMessage } from "./utils/message.js";
+import { fastTransferExceedsMaxFee, fastTransferExceedsMaxWait } from "./utils/fastTransferPolicy.js";
 import { approveUsdcOnArc, burnUsdcOnArcWithStellarForward, receiveMessageOnArc } from "./chains/arc.js";
 import {
   approveUsdcOnStellar,
@@ -33,8 +35,6 @@ import {
   mintAndForwardOnStellar,
   checkStellarRecipientReady,
 } from "./chains/stellar.js";
-
-const FAST_ESTIMATED_DURATION_SECONDS = 15;
 
 function domainFor(chain: "arc" | "stellar"): number {
   return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;
@@ -54,18 +54,17 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   let feeRaw = 0n;
 
   if (transferMode === "fast") {
-    if (options.maxWait !== undefined && FAST_ESTIMATED_DURATION_SECONDS > options.maxWait) {
+    if (fastTransferExceedsMaxWait(FAST_TRANSFER_ESTIMATED_DURATION_SECONDS, options.maxWait)) {
       transferMode = "standard";
     } else {
       const feeBps = await fetchFastTransferFeeBps(domainFor(params.from), domainFor(params.to), useSandbox);
       const amountRawSource = toRawAmount(params.amount, params.from);
       feeRaw = (amountRawSource * BigInt(feeBps)) / 10_000n;
-      if (options.maxFee !== undefined) {
-        const maxFeeRaw = parseUsdcAmount(options.maxFee, decimalsForChain(params.from));
-        if (feeRaw > maxFeeRaw) {
-          transferMode = "standard";
-          feeRaw = 0n;
-        }
+      const maxFeeRaw =
+        options.maxFee !== undefined ? parseUsdcAmount(options.maxFee, decimalsForChain(params.from)) : undefined;
+      if (fastTransferExceedsMaxFee(feeRaw, maxFeeRaw)) {
+        transferMode = "standard";
+        feeRaw = 0n;
       }
     }
   }

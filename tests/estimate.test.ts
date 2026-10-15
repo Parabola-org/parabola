@@ -54,4 +54,46 @@ describe("estimateFee", () => {
 
     expect(fetchFastTransferFeeBps).toHaveBeenCalledWith(26, 27, true);
   });
+
+  it("falls back to standard when maxWait is below the fast duration estimate, without calling Iris", async () => {
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxWait: 10,
+    });
+
+    expect(estimate).toMatchObject({ protocolFee: "0", transferMode: "standard" });
+    expect(fetchFastTransferFeeBps).not.toHaveBeenCalled();
+  });
+
+  it("falls back to standard when the quoted fast fee exceeds maxFee", async () => {
+    fetchFastTransferFeeBps.mockResolvedValue(10); // 0.1% of 100 = 0.1
+
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxFee: "0.05",
+    });
+
+    expect(estimate).toMatchObject({ protocolFee: "0", transferMode: "standard" });
+  });
+
+  it("keeps fast when maxFee covers the quoted fee and maxWait covers the duration", async () => {
+    fetchFastTransferFeeBps.mockResolvedValue(10);
+
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxFee: "1",
+      maxWait: 15,
+    });
+
+    expect(estimate).toMatchObject({ protocolFee: "0.1", transferMode: "fast" });
+  });
 });
