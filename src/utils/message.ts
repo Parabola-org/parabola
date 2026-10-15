@@ -37,6 +37,13 @@ const BODY_OFFSET = {
 
 /** Every CCTP V2 message header is this long, and every burn body at least this long. */
 const V2_BURN_MESSAGE_MINIMUM_LENGTH = BODY_OFFSET.hookData;
+/**
+ * Circle's MessageV2.sol and BurnMessageV2.sol both define MESSAGE_VERSION = 1 /
+ * MESSAGE_BODY_VERSION = 1 (V1 used 0). Verified against Circle's reference contracts
+ * and live Iris sandbox attestations.
+ */
+const EXPECTED_MESSAGE_VERSION = 1;
+const EXPECTED_BURN_BODY_VERSION = 1;
 
 export interface CctpBurnMessage {
   version: number;
@@ -93,12 +100,26 @@ export function decodeCctpMessage(message: string): CctpBurnMessage {
     );
   }
 
+  const version = raw.readUInt32BE(HEADER_OFFSET.version);
+  if (version !== EXPECTED_MESSAGE_VERSION) {
+    throw new Error(
+      `Unsupported CCTP message version: found ${version}, expected ${EXPECTED_MESSAGE_VERSION}`,
+    );
+  }
+
+  const burnBodyVersion = raw.readUInt32BE(BODY_OFFSET.version);
+  if (burnBodyVersion !== EXPECTED_BURN_BODY_VERSION) {
+    throw new Error(
+      `Unsupported CCTP burn body version: found ${burnBodyVersion}, expected ${EXPECTED_BURN_BODY_VERSION}`,
+    );
+  }
+
   const hookBytes = raw.subarray(BODY_OFFSET.hookData);
   const hookData =
     hookBytes.length > 0 ? (`0x${hookBytes.toString("hex")}` as `0x${string}`) : null;
 
   return {
-    version: raw.readUInt32BE(HEADER_OFFSET.version),
+    version,
     sourceDomain: raw.readUInt32BE(HEADER_OFFSET.sourceDomain),
     destinationDomain: raw.readUInt32BE(HEADER_OFFSET.destinationDomain),
     nonce: readBytes32(raw, HEADER_OFFSET.nonce),
@@ -107,7 +128,7 @@ export function decodeCctpMessage(message: string): CctpBurnMessage {
     destinationCaller: readBytes32(raw, HEADER_OFFSET.destinationCaller),
     minFinalityThreshold: raw.readUInt32BE(HEADER_OFFSET.minFinalityThreshold),
     finalityThresholdExecuted: raw.readUInt32BE(HEADER_OFFSET.finalityThresholdExecuted),
-    burnBodyVersion: raw.readUInt32BE(BODY_OFFSET.version),
+    burnBodyVersion,
     burnToken: readBytes32(raw, BODY_OFFSET.burnToken),
     mintRecipient: readBytes32(raw, BODY_OFFSET.mintRecipient),
     amountRaw: BigInt(readBytes32(raw, BODY_OFFSET.amount)),
