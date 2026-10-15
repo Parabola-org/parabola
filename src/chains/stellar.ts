@@ -1,15 +1,18 @@
 import {
+  Account,
   Contract,
+  Keypair,
   TransactionBuilder,
   BASE_FEE,
   Address,
   nativeToScVal,
   scValToNative,
   rpc,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { stellarConfig, STELLAR_TX_TIMEOUT_SECONDS, STELLAR_CONFIRMATION_TIMEOUT_MS, STELLAR_INCLUSION_FEE } from "../constants.js";
 import type { StellarSigner, Network } from "../types.js";
-import { SubmissionTimeoutError } from "../errors.js";
+import { SubmissionTimeoutError, StellarRpcError } from "../errors.js";
 
 function getServer(network: Network, rpcUrl?: string): rpc.Server {
   return new rpc.Server(rpcUrl ?? stellarConfig(network).sorobanRpcUrl);
@@ -149,12 +152,36 @@ export async function checkStellarRecipientReady(
   const stellar = stellarConfig(network);
   const server = getServer(network, rpcUrl);
 
-  let account;
+  // Query the account's ledger entry directly: server.getAccount() wraps every
+  // failure — DNS, 503, rate limit — in the same "Account not found" error as a
+  // genuinely unfunded address, so it cannot tell the two apart. getLedgerEntries
+  // propagates transport errors and only an empty entry list means missing.
+  const accountKey = xdr.LedgerKey.account(
+    new xdr.LedgerKeyAccount({
+      accountId: Keypair.fromPublicKey(recipient).xdrPublicKey(),
+    }),
+  );
+  let entries;
   try {
-    account = await server.getAccount(recipient);
-  } catch {
+    entries = (await server.getLedgerEntries(accountKey)).entries;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const status =
+      e && typeof e === "object" && "response" in e
+        ? (e as { response?: { status?: number } }).response?.status
+        : undefined;
+    throw new StellarRpcError(
+      `Failed to check Stellar recipient ${recipient} — RPC error, not a missing account: ${msg}`,
+      status,
+    );
+  }
+  if (!entries || entries.length === 0) {
     return { exists: false, hasTrustline: false, ready: false };
   }
+  const account = new Account(
+    recipient,
+    entries[0]!.val.account().seqNum().toString(),
+  );
 
   const contract = new Contract(stellar.usdc);
   const tx = new TransactionBuilder(account, {

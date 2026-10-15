@@ -68,6 +68,23 @@ export class IrisRequestError extends Error {
 }
 
 /**
+ * Thrown when the Stellar RPC endpoint cannot be reached or answers with a
+ * transport-level failure. An unfunded account is a normal lookup result, but a
+ * 503 or DNS failure is an infrastructure problem the caller should retry — not
+ * a missing recipient, and never the "fund the account" remediation path.
+ */
+export class StellarRpcError extends Error {
+  /** HTTP status when the server responded; undefined when no response arrived. */
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "StellarRpcError";
+    this.status = status;
+  }
+}
+
+/**
  * Thrown when a transaction was broadcast (a hash exists) but the SDK gave up waiting
  * for on-chain confirmation before it could tell whether it landed. This is genuine
  * uncertainty, not "nothing happened": the transaction may still succeed or fail on

@@ -172,19 +172,43 @@ describe("approveUsdcOnStellar", () => {
 });
 
 describe("checkStellarRecipientReady", () => {
+  const accountEntry = { val: { account: () => ({ seqNum: () => ({ toString: () => "1" }) }) } };
+
   it("reports not-existing when the account has never been funded", async () => {
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockRejectedValue(
-      new Error("Account not found: G..."),
-    );
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({
+      entries: [],
+      latestLedger: 0,
+    } as any);
 
     const status = await checkStellarRecipientReady(Keypair.random().publicKey());
 
     expect(status).toEqual({ exists: false, hasTrustline: false, ready: false });
   });
 
+  it("rejects as infrastructure failure on transport/5xx, not missing-account", async () => {
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockRejectedValue(
+      new Error("socket hangup"),
+    );
+
+    await expect(
+      checkStellarRecipientReady(Keypair.random().publicKey()),
+    ).rejects.toMatchObject({ name: "StellarRpcError" });
+  });
+
+  it("carries the HTTP status on a rate-limited response", async () => {
+    const err = Object.assign(new Error("request failed"), {
+      response: { status: 503 },
+    });
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockRejectedValue(err);
+
+    await expect(
+      checkStellarRecipientReady(Keypair.random().publicKey()),
+    ).rejects.toMatchObject({ name: "StellarRpcError", status: 503 });
+  });
+
   it("reports missing-trustline when the account exists but has never held USDC", async () => {
     const recipient = Keypair.random().publicKey();
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({ entries: [accountEntry], latestLedger: 0 } as any);
     vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
       error:
         'HostError: Error(Contract, #13)\n\nEvent log (newest first):\n   0: [Diagnostic Event] ... data:["trustline entry is missing for account", "' +
@@ -199,7 +223,7 @@ describe("checkStellarRecipientReady", () => {
 
   it("reports ready when the account exists and holds the USDC trustline", async () => {
     const recipient = Keypair.random().publicKey();
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({ entries: [accountEntry], latestLedger: 0 } as any);
     vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
       transactionData: {},
       result: { retval: nativeToScVal(0n, { type: "i128" }) },
@@ -212,7 +236,7 @@ describe("checkStellarRecipientReady", () => {
 
   it("rethrows an unrelated simulation error instead of misreporting it as a missing trustline", async () => {
     const recipient = Keypair.random().publicKey();
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({ entries: [accountEntry], latestLedger: 0 } as any);
     vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
       error: "HostError: some unrelated simulation failure",
     } as any);

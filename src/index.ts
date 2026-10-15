@@ -17,6 +17,7 @@ export {
   SubmissionTimeoutError,
   AttestationNotReadyError,
   IrisRequestError,
+  StellarRpcError,
 } from "./errors.js";
 export type { TransferErrorCode } from "./errors.js";
 export type { StellarRecipientStatus } from "./chains/stellar.js";
