@@ -53,6 +53,8 @@ export interface TransferOptionsBase {
    * client broadcasts. No effect on Stellar.
    */
   arcRpcUrl?: string;
+  /** Optional AbortSignal to cancel in-flight polling and transactions. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -143,6 +145,8 @@ export interface CompleteMintOptions {
   stellarRpcUrl?: string;
   /** Overrides the Arc RPC URL. No effect on Stellar. */
   arcRpcUrl?: string;
+  /** Optional AbortSignal to cancel in-flight polling and transactions. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -170,6 +174,8 @@ interface CompleteMintParamsBase {
   stellarRpcUrl?: string;
   /** Overrides the Arc RPC URL. No effect on Stellar. */
   arcRpcUrl?: string;
+  /** Optional AbortSignal to cancel in-flight polling and transactions. */
+  signal?: AbortSignal;
 }
 
 export interface CompleteMintResult {
@@ -184,6 +190,8 @@ export interface ResolveBurnParams {
   burnTxHash: string;
   /** Which deployment the burn happened on. Default "mainnet". */
   network?: Network;
+  /** Optional AbortSignal to cancel in-flight attestation polling. */
+  signal?: AbortSignal;
 }
 
 /**
