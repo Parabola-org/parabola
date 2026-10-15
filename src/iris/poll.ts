@@ -11,9 +11,11 @@ export async function fetchFastTransferFeeBps(
   sourceDomain: number,
   destDomain: number,
   useSandbox: boolean,
+  signal?: AbortSignal,
 ): Promise<number> {
+  throwIfAborted(signal);
   const url = `${irisBaseUrl(useSandbox)}burn/USDC/fees/${sourceDomain}/${destDomain}`;
-  const res = await fetch(url);
+  const res = await fetch(url, signal ? { signal } : undefined);
   if (!res.ok) {
     throw new Error(`Iris fees request failed: ${res.status} ${res.statusText}`);
   }
@@ -45,11 +47,20 @@ type PollOutcome =
  * complete: false. Its bytes are already final, so a caller that only needs to know what
  * the burn will do can read it before Circle has signed.
  */
-async function pollOnce(url: string, transactionHash: string): Promise<PollOutcome> {
+async function pollOnce(
+  url: string,
+  transactionHash: string,
+  signal?: AbortSignal,
+): Promise<PollOutcome> {
+  throwIfAborted(signal);
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, signal ? { signal } : undefined);
   } catch (err) {
+    throwIfAborted(signal);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw err;
+    }
     const reason = err instanceof Error ? err.message : String(err);
     return {
       kind: "failure",
@@ -103,10 +114,12 @@ export async function getAttestation(params: {
   sourceDomain: number;
   transactionHash: string;
   useSandbox: boolean;
+  signal?: AbortSignal;
 }): Promise<IrisMessage> {
   const outcome = await pollOnce(
     attestationUrl(params.sourceDomain, params.transactionHash, params.useSandbox),
     params.transactionHash,
+    params.signal,
   );
 
   if (outcome.kind === "message") {
@@ -136,6 +149,7 @@ export async function pollForAttestation(params: {
   useSandbox: boolean;
   pollInterval?: number;
   pollTimeout?: number;
+  signal?: AbortSignal;
 }): Promise<IrisMessage> {
   const pollInterval = params.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = params.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
@@ -144,8 +158,11 @@ export async function pollForAttestation(params: {
   const deadline = Date.now() + pollTimeout;
   let consecutiveFailures = 0;
 
+  throwIfAborted(params.signal);
+
   while (Date.now() < deadline) {
-    const outcome = await pollOnce(url, params.transactionHash);
+    throwIfAborted(params.signal);
+    const outcome = await pollOnce(url, params.transactionHash, params.signal);
 
     if (outcome.kind === "message" && outcome.complete) {
       return outcome.message;
@@ -160,7 +177,7 @@ export async function pollForAttestation(params: {
       consecutiveFailures = 0;
     }
 
-    await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())));
+    await abortableSleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())), params.signal);
   }
 
   throw new AttestationNotReadyError(
@@ -169,6 +186,32 @@ export async function pollForAttestation(params: {
   );
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function createAbortError(reason?: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const err = new Error(typeof reason === "string" && reason ? reason : "The operation was aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError(signal.reason);
+  }
+}
+
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(createAbortError(signal?.reason));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

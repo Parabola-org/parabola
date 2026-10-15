@@ -26,11 +26,15 @@ vi.mock("../src/chains/stellar.js", () => ({
   checkStellarRecipientReady: (...args: unknown[]) => checkStellarRecipientReady(...args),
 }));
 
-vi.mock("../src/iris/poll.js", () => ({
-  fetchFastTransferFeeBps: (...args: unknown[]) => fetchFastTransferFeeBps(...args),
-  pollForAttestation: (...args: unknown[]) => pollForAttestation(...args),
-  getAttestation: (...args: unknown[]) => getAttestation(...args),
-}));
+vi.mock("../src/iris/poll.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/iris/poll.js")>();
+  return {
+    ...actual,
+    fetchFastTransferFeeBps: (...args: unknown[]) => fetchFastTransferFeeBps(...args),
+    pollForAttestation: (...args: unknown[]) => pollForAttestation(...args),
+    getAttestation: (...args: unknown[]) => getAttestation(...args),
+  };
+});
 
 const { transfer, completeMint, resolveBurn } = await import("../src/transfer.js");
 const { TransferError, SubmissionTimeoutError, AttestationNotReadyError } = await import(
@@ -664,5 +668,98 @@ describe("transfer fast/standard fee handling", () => {
 
     expect(result.transferMode).toBe("fast");
     expect(result.fee).toBe("0.1");
+  });
+});
+
+describe("AbortSignal support", () => {
+  it("rejects with a plain AbortError before the burn without submitting any chain calls", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const err = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: { signal: controller.signal },
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TransferError);
+    expect((err as Error).name).toBe("AbortError");
+    expect(approveUsdcOnArc).not.toHaveBeenCalled();
+    expect(burnUsdcOnArcWithStellarForward).not.toHaveBeenCalled();
+  });
+
+  it("rejects with a plain AbortError if aborted during approve before the burn is submitted", async () => {
+    const controller = new AbortController();
+    approveUsdcOnArc.mockImplementationOnce(async () => {
+      controller.abort();
+      return "0xapprovehash";
+    });
+
+    const err = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: { signal: controller.signal },
+    }).catch((e) => e);
+
+    expect(err).not.toBeInstanceOf(TransferError);
+    expect((err as Error).name).toBe("AbortError");
+    expect(burnUsdcOnArcWithStellarForward).not.toHaveBeenCalled();
+  });
+
+  it("wraps a post-burn abort in TransferError with the real burnTxHash and code ABORTED", async () => {
+    const controller = new AbortController();
+    pollForAttestation.mockImplementationOnce(async (args: { signal?: AbortSignal }) => {
+      expect(args.signal).toBe(controller.signal);
+      controller.abort();
+      const abortErr = new Error("The operation was aborted");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    });
+
+    const err = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: { destinationSigner: stellarSigner, signal: controller.signal },
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(TransferError);
+    expect((err as InstanceType<typeof TransferError>).burnTxHash).toBe("0xburnhookhash");
+    expect((err as InstanceType<typeof TransferError>).code).toBe("ABORTED");
+    expect(mintAndForwardOnStellar).not.toHaveBeenCalled();
+  });
+
+  it("threads options.signal into completeMint and rejects when aborted", async () => {
+    const controller = new AbortController();
+    pollForAttestation.mockImplementationOnce(async (args: { signal?: AbortSignal }) => {
+      expect(args.signal).toBe(controller.signal);
+      controller.abort();
+      const abortErr = new Error("The operation was aborted");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    });
+
+    const err = await completeMint({
+      from: "arc",
+      to: "stellar",
+      burnTxHash: "0xburnhookhash",
+      signer: stellarSigner,
+      options: { signal: controller.signal },
+    }).catch((e) => e);
+
+    expect((err as Error).name).toBe("AbortError");
+    expect(mintAndForwardOnStellar).not.toHaveBeenCalled();
   });
 });

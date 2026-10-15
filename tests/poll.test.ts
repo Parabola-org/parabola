@@ -161,4 +161,27 @@ describe("pollForAttestation", () => {
 
     expect(message.attestation).toBe("0xabc");
   });
+
+  it("passes AbortSignal through to fetch and aborts promptly during the poll sleep", async () => {
+    const controller = new AbortController();
+    const fetchSpy = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal);
+      setTimeout(() => controller.abort(), 5);
+      return okResponse(PENDING_BODY);
+    });
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const start = Date.now();
+    const err = await pollForAttestation({
+      ...POLL,
+      pollInterval: 10_000,
+      pollTimeout: 60_000,
+      signal: controller.signal,
+    }).catch((e) => e);
+    const elapsed = Date.now() - start;
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("AbortError");
+    expect(elapsed).toBeLessThan(1000);
+  });
 });

@@ -53,6 +53,8 @@ export interface TransferOptionsBase {
    * client broadcasts. No effect on Stellar.
    */
   arcRpcUrl?: string;
+  /** Optional AbortSignal to cancel in-flight RPC/Iris requests and polling loops. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -143,6 +145,8 @@ export interface CompleteMintOptions {
   stellarRpcUrl?: string;
   /** Overrides the Arc RPC URL. No effect on Stellar. */
   arcRpcUrl?: string;
+  /** Optional AbortSignal to cancel in-flight Iris polling and destination minting. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -170,6 +174,8 @@ interface CompleteMintParamsBase {
   stellarRpcUrl?: string;
   /** Overrides the Arc RPC URL. No effect on Stellar. */
   arcRpcUrl?: string;
+  /** Optional AbortSignal to cancel in-flight Iris polling and destination minting. */
+  signal?: AbortSignal;
 }
 
 export interface CompleteMintResult {

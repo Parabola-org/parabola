@@ -21,8 +21,18 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_POLL_TIMEOUT_MS,
 } from "./constants.js";
-import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
-import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
+import {
+  fetchFastTransferFeeBps,
+  pollForAttestation,
+  getAttestation,
+  throwIfAborted,
+} from "./iris/poll.js";
+import {
+  TransferError,
+  type TransferErrorCode,
+  SubmissionTimeoutError,
+  AttestationNotReadyError,
+} from "./errors.js";
 import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
 import { decodeCctpMessage } from "./utils/message.js";
@@ -49,6 +59,9 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   const arcRpcUrl = options.arcRpcUrl;
   const pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = options.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
+  const signal = options.signal;
+
+  throwIfAborted(signal);
 
   let transferMode: TransferMode = params.speed;
   let feeRaw = 0n;
@@ -57,7 +70,12 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     if (options.maxWait !== undefined && FAST_ESTIMATED_DURATION_SECONDS > options.maxWait) {
       transferMode = "standard";
     } else {
-      const feeBps = await fetchFastTransferFeeBps(domainFor(params.from), domainFor(params.to), useSandbox);
+      const feeBps = await fetchFastTransferFeeBps(
+        domainFor(params.from),
+        domainFor(params.to),
+        useSandbox,
+        signal,
+      );
       const amountRawSource = toRawAmount(params.amount, params.from);
       feeRaw = (amountRawSource * BigInt(feeBps)) / 10_000n;
       if (options.maxFee !== undefined) {
@@ -86,6 +104,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     amountRaw,
     maxFeeRaw,
     minFinalityThreshold,
+    signal,
   });
 
   // Everything past this point runs after the source-chain burn has already happened.
@@ -94,12 +113,14 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   // a TransferError rather than left to vanish with a bare Error.
   let attestationHash: string | undefined;
   try {
+    throwIfAborted(signal);
     const attestation = await pollForAttestation({
       sourceDomain: domainFor(params.from),
       transactionHash: burnTxHash,
       useSandbox,
       pollInterval,
       pollTimeout,
+      signal,
     });
     attestationHash = attestation.attestation ?? undefined;
 
@@ -107,6 +128,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     let status: TransferResult["status"] = "pending";
 
     if (options.destinationSigner && attestation.message && attestation.attestation) {
+      throwIfAborted(signal);
       mintTxHash = await mint({
         to: params.to,
         message: attestation.message as `0x${string}`,
@@ -115,6 +137,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
         network,
         stellarRpcUrl,
         arcRpcUrl,
+        signal,
       });
       status = "success";
     }
@@ -133,7 +156,13 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     // burnTxHash has to survive this wrap, but so does the distinction between "Circle has
     // not attested it yet" and a real failure, since a caller retries one and gives up on
     // the other. That distinction rides along as a code rather than only in the message.
-    const code = err instanceof AttestationNotReadyError ? "ATTESTATION_NOT_READY" : undefined;
+    const isAbort =
+      signal?.aborted || (err instanceof Error && err.name === "AbortError");
+    const code: TransferErrorCode | undefined = isAbort
+      ? "ABORTED"
+      : err instanceof AttestationNotReadyError
+        ? "ATTESTATION_NOT_READY"
+        : undefined;
     throw new TransferError(message, burnTxHash, attestationHash, code);
   }
 }
@@ -146,9 +175,20 @@ async function burn(args: {
   amountRaw: bigint;
   maxFeeRaw: bigint;
   minFinalityThreshold: number;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { params, network, stellarRpcUrl, arcRpcUrl, amountRaw, maxFeeRaw, minFinalityThreshold } =
-    args;
+  const {
+    params,
+    network,
+    stellarRpcUrl,
+    arcRpcUrl,
+    amountRaw,
+    maxFeeRaw,
+    minFinalityThreshold,
+    signal,
+  } = args;
+
+  throwIfAborted(signal);
 
   if (params.from === "arc") {
     const signer = params.signer;
@@ -156,12 +196,14 @@ async function burn(args: {
     // Arc is only ever the source of a Stellar-bound transfer here, so the recipient
     // check and the hook encoding are unconditional rather than gated on params.to.
     await assertStellarRecipientReady(params.recipient, network, stellarRpcUrl);
+    throwIfAborted(signal);
 
     // TokenMessengerV2 pulls USDC via transferFrom under the hood; it must be
     // approved to spend at least amountRaw before depositForBurnWithHook will
     // succeed. Approving the exact amount per call avoids leaving a standing
     // allowance beyond what this transfer needs.
     await approveUsdcOnArc(signer, amountRaw, network, arcRpcUrl);
+    throwIfAborted(signal);
     return runBurn(() => {
       const hookData = encodeStellarForwardHook(params.recipient);
       const mintRecipientBytes32 = stellarAddressToBytes32(stellarConfig(network).cctpForwarder);
@@ -176,25 +218,29 @@ async function burn(args: {
         network,
         rpcUrl: arcRpcUrl,
       });
-    });
+    }, signal);
   }
 
   const signer = params.signer;
   const mintRecipientBytes32 = evmAddressToBytes32(params.recipient);
   // Stellar's SEP-41 USDC token requires the same approve-before-transfer_from
   // pattern as ERC20 on Arc.
-  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl);
-  return runBurn(() =>
-    burnUsdcOnStellar({
-      amountRaw,
-      destinationDomain: ARC_DOMAIN,
-      mintRecipientBytes32,
-      maxFeeRaw,
-      minFinalityThreshold,
-      signer,
-      network,
-      rpcUrl: stellarRpcUrl,
-    }),
+  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl, signal);
+  throwIfAborted(signal);
+  return runBurn(
+    () =>
+      burnUsdcOnStellar({
+        amountRaw,
+        destinationDomain: ARC_DOMAIN,
+        mintRecipientBytes32,
+        maxFeeRaw,
+        minFinalityThreshold,
+        signer,
+        network,
+        rpcUrl: stellarRpcUrl,
+        signal,
+      }),
+    signal,
   );
 }
 
@@ -229,12 +275,13 @@ async function assertStellarRecipientReady(
  * only way to recover via completeMint(), so it's converted to a TransferError instead
  * of propagating as a bare SubmissionTimeoutError.
  */
-async function runBurn(call: () => Promise<string>): Promise<string> {
+async function runBurn(call: () => Promise<string>, signal?: AbortSignal): Promise<string> {
   try {
     return await call();
   } catch (err) {
     if (err instanceof SubmissionTimeoutError) {
-      throw new TransferError(err.message, err.hash);
+      const code: TransferErrorCode | undefined = signal?.aborted ? "ABORTED" : undefined;
+      throw new TransferError(err.message, err.hash, undefined, code);
     }
     throw err;
   }
@@ -248,8 +295,9 @@ async function mint(args: {
   network: Network;
   stellarRpcUrl?: string;
   arcRpcUrl?: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { to, message, attestation, signer, network, stellarRpcUrl, arcRpcUrl } = args;
+  const { to, message, attestation, signer, network, stellarRpcUrl, arcRpcUrl, signal } = args;
 
   if (to === "arc") {
     return receiveMessageOnArc({
@@ -266,6 +314,7 @@ async function mint(args: {
     signer: signer as StellarSigner,
     network,
     rpcUrl: stellarRpcUrl,
+    signal,
   });
 }
 
@@ -325,6 +374,9 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
   const pollTimeout = options.pollTimeout ?? params.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
   const stellarRpcUrl = options.stellarRpcUrl ?? params.stellarRpcUrl;
   const arcRpcUrl = options.arcRpcUrl ?? params.arcRpcUrl;
+  const signal = options.signal ?? params.signal;
+
+  throwIfAborted(signal);
 
   const attestation = await pollForAttestation({
     sourceDomain: domainFor(params.from),
@@ -332,6 +384,7 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
     useSandbox,
     pollInterval,
     pollTimeout,
+    signal,
   });
 
   if (!attestation.message || !attestation.attestation) {
@@ -341,6 +394,8 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
     );
   }
 
+  throwIfAborted(signal);
+
   if (params.to === "stellar") {
     const { forwardRecipient } = decodeCctpMessage(attestation.message);
     if (!forwardRecipient) {
@@ -349,6 +404,7 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
       );
     }
     await assertStellarRecipientReady(forwardRecipient, network, stellarRpcUrl);
+    throwIfAborted(signal);
   }
 
   const mintTxHash = await mint({
@@ -359,6 +415,7 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
     network,
     stellarRpcUrl,
     arcRpcUrl,
+    signal,
   });
 
   return { mintTxHash, attestationHash: attestation.attestation };

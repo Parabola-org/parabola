@@ -29,7 +29,7 @@ export class TransferError extends Error {
   }
 }
 
-export type TransferErrorCode = "ATTESTATION_NOT_READY";
+export type TransferErrorCode = "ATTESTATION_NOT_READY" | "ABORTED";
 
 /**
  * Thrown when a burn has been confirmed on the source chain but Circle has not attested it
