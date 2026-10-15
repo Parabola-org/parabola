@@ -1,5 +1,6 @@
 import { IRIS_MAINNET_BASE_URL, IRIS_SANDBOX_BASE_URL, DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_TIMEOUT_MS } from "../constants.js";
 import { AttestationNotReadyError, IrisRequestError } from "../errors.js";
+import { sleep, throwIfAborted } from "../utils/abort.js";
 import type { IrisMessage, IrisMessagesResponse, IrisFeesResponse } from "./types.js";
 
 export function irisBaseUrl(useSandbox: boolean): string {
@@ -45,11 +46,18 @@ type PollOutcome =
  * complete: false. Its bytes are already final, so a caller that only needs to know what
  * the burn will do can read it before Circle has signed.
  */
-async function pollOnce(url: string, transactionHash: string): Promise<PollOutcome> {
+async function pollOnce(
+  url: string,
+  transactionHash: string,
+  signal?: AbortSignal,
+): Promise<PollOutcome> {
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, signal ? { signal } : undefined);
   } catch (err) {
+    if (signal?.aborted) {
+      throw err;
+    }
     const reason = err instanceof Error ? err.message : String(err);
     return {
       kind: "failure",
@@ -136,6 +144,7 @@ export async function pollForAttestation(params: {
   useSandbox: boolean;
   pollInterval?: number;
   pollTimeout?: number;
+  signal?: AbortSignal;
 }): Promise<IrisMessage> {
   const pollInterval = params.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = params.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
@@ -145,7 +154,8 @@ export async function pollForAttestation(params: {
   let consecutiveFailures = 0;
 
   while (Date.now() < deadline) {
-    const outcome = await pollOnce(url, params.transactionHash);
+    throwIfAborted(params.signal);
+    const outcome = await pollOnce(url, params.transactionHash, params.signal);
 
     if (outcome.kind === "message" && outcome.complete) {
       return outcome.message;
@@ -160,15 +170,11 @@ export async function pollForAttestation(params: {
       consecutiveFailures = 0;
     }
 
-    await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())), params.signal);
   }
 
   throw new AttestationNotReadyError(
     `Timed out after ${pollTimeout}ms waiting for Iris attestation of ${params.transactionHash}`,
     params.transactionHash,
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

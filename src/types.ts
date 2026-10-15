@@ -35,6 +35,13 @@ export type StellarSigner = { publicKey: string } & (
 export type Signer = ArcSigner | StellarSigner;
 
 export interface TransferOptionsBase {
+  /**
+   * Cancels the transfer. Aborting before the source-chain burn is submitted rejects
+   * with a plain AbortError and nothing is lost; aborting after the burn is on the
+   * wire rejects with a TransferError that still carries burnTxHash (code "ABORTED"),
+   * so the recovery path is identical to any other post-burn failure.
+   */
+  signal?: AbortSignal;
   /** Max USDC fee tolerated for a fast transfer. Falls back to standard if the quoted fee exceeds this. */
   maxFee?: string;
   /** Max seconds to wait before falling back to standard transfer. */
@@ -132,6 +139,12 @@ export interface FeeEstimate {
  * caller that already holds a TransferOptions-shaped object can reuse it.
  */
 export interface CompleteMintOptions {
+  /**
+   * Cancels the completion. The burn already exists by the time completeMint runs,
+   * so an abort rejects with a TransferError carrying burnTxHash — the recovery path
+   * is unchanged: call completeMint again later.
+   */
+  signal?: AbortSignal;
   /** Milliseconds between Iris attestation polls. Default 3000. */
   pollInterval?: number;
   /** Milliseconds before polling gives up. Default 300000. */

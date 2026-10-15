@@ -666,3 +666,55 @@ describe("transfer fast/standard fee handling", () => {
     expect(result.fee).toBe("0.1");
   });
 });
+
+describe("transfer abort", () => {
+  it("pre-burn abort rejects with a plain AbortError and submits nothing", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      transfer({
+        from: "arc",
+        to: "stellar",
+        amount: "10",
+        recipient: FORWARD_RECIPIENT,
+        speed: "standard",
+        signer: arcSigner,
+        options: { signal: controller.signal },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(approveUsdcOnArc).not.toHaveBeenCalled();
+    expect(burnUsdcOnArcWithStellarForward).not.toHaveBeenCalled();
+  });
+
+  it("post-burn abort rejects with TransferError carrying the real burnTxHash", async () => {
+    const controller = new AbortController();
+    pollForAttestation.mockImplementation(async ({ signal }: { signal?: AbortSignal }) => {
+      controller.abort();
+      throwIfAbortedLike(signal); // the real poll rejects with AbortError on abort
+      throw new Error("unreachable");
+    });
+
+    await expect(
+      transfer({
+        from: "arc",
+        to: "stellar",
+        amount: "10",
+        recipient: FORWARD_RECIPIENT,
+        speed: "standard",
+        signer: arcSigner,
+        options: { signal: controller.signal },
+      }),
+    ).rejects.toMatchObject({
+      name: "TransferError",
+      burnTxHash: "0xburnhookhash",
+      code: "ABORTED",
+    });
+  });
+});
+
+function throwIfAbortedLike(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
+}

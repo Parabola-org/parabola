@@ -2,6 +2,7 @@ import { createPublicClient, http, defineChain, type Hex } from "viem";
 import { ARC_TESTNET, ARC_MAINNET, arcConfig } from "../constants.js";
 import type { ArcSigner, Network } from "../types.js";
 import { SubmissionTimeoutError } from "../errors.js";
+import { throwIfAborted, abortError } from "../utils/abort.js";
 
 export const arcTestnetChain = defineChain({
   id: ARC_TESTNET.chainId,
@@ -113,7 +114,9 @@ async function writeAndWait(
   request: WriteContractRequest,
   network: Network,
   rpcUrl?: string,
+  signal?: AbortSignal,
 ) {
+  throwIfAborted(signal);
   const account = signer.walletClient.account;
   if (!account) {
     throw new Error("ArcSigner's walletClient must have an account attached");
@@ -124,7 +127,17 @@ async function writeAndWait(
     chain: chainFor(network),
   } as Parameters<ArcSigner["walletClient"]["writeContract"]>[0]);
   try {
-    await publicClient(network, rpcUrl).waitForTransactionReceipt({ hash });
+    // viem does not accept an AbortSignal on waitForTransactionReceipt, so the
+    // wait is raced against the signal: an abort surfaces as a
+    // SubmissionTimeoutError because the broadcast hash already exists and must
+    // reach the caller for recovery either way.
+    await Promise.race([
+      publicClient(network, rpcUrl).waitForTransactionReceipt({ hash }),
+      new Promise<never>((_, reject) => {
+        if (signal?.aborted) return reject(abortError());
+        signal?.addEventListener("abort", () => reject(abortError()), { once: true });
+      }),
+    ]);
   } catch (err) {
     // The transaction was already broadcast (hash exists); a failure here means we
     // couldn't confirm it in time, not that it didn't happen. Surface the hash instead
@@ -141,7 +154,9 @@ export async function approveUsdcOnArc(
   amountRaw: bigint,
   network: Network,
   rpcUrl?: string,
+  signal?: AbortSignal,
 ): Promise<Hex> {
+  throwIfAborted(signal);
   const arc = arcConfig(network);
   return writeAndWait(
     signer,
@@ -153,6 +168,7 @@ export async function approveUsdcOnArc(
     },
     network,
     rpcUrl,
+    signal,
   );
 }
 
@@ -167,7 +183,9 @@ export async function burnUsdcOnArc(params: {
   network: Network;
   /** Overrides the Arc RPC endpoint. Falls back to the network's public default. */
   rpcUrl?: string;
+  signal?: AbortSignal;
 }): Promise<Hex> {
+  throwIfAborted(params.signal);
   const arc = arcConfig(params.network);
   return writeAndWait(
     params.signer,
@@ -187,6 +205,7 @@ export async function burnUsdcOnArc(params: {
     },
     params.network,
     params.rpcUrl,
+    params.signal,
   );
 }
 
@@ -206,7 +225,9 @@ export async function burnUsdcOnArcWithStellarForward(params: {
   network: Network;
   /** Overrides the Arc RPC endpoint. Falls back to the network's public default. */
   rpcUrl?: string;
+  signal?: AbortSignal;
 }): Promise<Hex> {
+  throwIfAborted(params.signal);
   const arc = arcConfig(params.network);
   return writeAndWait(
     params.signer,
@@ -227,6 +248,7 @@ export async function burnUsdcOnArcWithStellarForward(params: {
     },
     params.network,
     params.rpcUrl,
+    params.signal,
   );
 }
 
@@ -238,7 +260,9 @@ export async function receiveMessageOnArc(params: {
   network: Network;
   /** Overrides the Arc RPC endpoint. Falls back to the network's public default. */
   rpcUrl?: string;
+  signal?: AbortSignal;
 }): Promise<Hex> {
+  throwIfAborted(params.signal);
   const arc = arcConfig(params.network);
   return writeAndWait(
     params.signer,

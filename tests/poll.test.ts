@@ -162,3 +162,35 @@ describe("pollForAttestation", () => {
     expect(message.attestation).toBe("0xabc");
   });
 });
+
+describe("pollForAttestation abort", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("rejects promptly on a pre-aborted signal, well before pollTimeout", async () => {
+    scriptFetch([okResponse(COMPLETE_BODY)]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const start = Date.now();
+    await expect(
+      pollForAttestation({ ...POLL, pollTimeout: 60_000, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
+  it("passes the signal through to fetch and aborts mid-poll", async () => {
+    const controller = new AbortController();
+    global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      controller.abort();
+      return okResponse(PENDING_BODY);
+    }) as unknown as typeof fetch;
+
+    await expect(
+      pollForAttestation({ ...POLL, pollInterval: 60_000, pollTimeout: 60_000, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(global.fetch).toHaveBeenCalledWith(expect.any(String), { signal: controller.signal });
+  });
+});
