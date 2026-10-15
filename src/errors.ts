@@ -78,8 +78,8 @@ export class IrisRequestError extends Error {
 export class SubmissionTimeoutError extends Error {
   readonly hash: string;
 
-  constructor(message: string, hash: string) {
-    super(message);
+  constructor(message: string, hash: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "SubmissionTimeoutError";
     this.hash = hash;
   }

@@ -68,21 +68,56 @@ async function invokeContract(
   return pollTransactionStatus(server, sendResult.hash);
 }
 
+const STELLAR_CONFIRMATION_POLL_INTERVAL_MS = 2000;
+
+/**
+ * How many getTransaction() calls in a row may throw (connection reset, 5xx, rate limit)
+ * before confirmation polling gives up, and how long to back off after each one. A single
+ * blip on the public Soroban RPC is routine and must not abort polling for a transaction
+ * that is already broadcast; a sustained run of failures means the RPC itself is down, which
+ * waiting longer will not fix. Mirrors IRIS_MAX_CONSECUTIVE_FAILURES in src/iris/poll.ts.
+ */
+const STELLAR_RPC_MAX_CONSECUTIVE_FAILURES = 5;
+const STELLAR_RPC_FAILURE_BACKOFF_MS = 1000;
+
 async function pollTransactionStatus(server: rpc.Server, hash: string): Promise<string> {
   const deadline = Date.now() + STELLAR_CONFIRMATION_TIMEOUT_MS;
+  let consecutiveFailures = 0;
   while (Date.now() < deadline) {
-    const result = await server.getTransaction(hash);
+    let result;
+    try {
+      result = await server.getTransaction(hash);
+    } catch (err) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= STELLAR_RPC_MAX_CONSECUTIVE_FAILURES) {
+        // Still a broadcast transaction whose outcome is unknown, not a failed one, so the
+        // hash travels with the error instead of being lost with the SDK's bare exception.
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new SubmissionTimeoutError(
+          `Stopped waiting for Stellar transaction ${hash} to confirm after ${consecutiveFailures} consecutive RPC failures (last: ${detail})`,
+          hash,
+          { cause: err },
+        );
+      }
+      await sleep(Math.min(STELLAR_RPC_FAILURE_BACKOFF_MS, Math.max(0, deadline - Date.now())));
+      continue;
+    }
+    consecutiveFailures = 0;
     if (result.status === "SUCCESS") return hash;
     if (result.status === "FAILED") {
       throw new Error(`Stellar transaction ${hash} failed`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await sleep(Math.min(STELLAR_CONFIRMATION_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
   }
   // The transaction was broadcast (this hash came from a successful sendTransaction);
   // confirmation did not arrive within the timeout. This differs from never having been
   // submitted, so the hash is surfaced for callers to act on instead of being discarded
   // in a bare error.
   throw new SubmissionTimeoutError(`Timed out waiting for Stellar transaction ${hash} to confirm`, hash);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Stellar confirmation polling no longer loses the transaction hash on a transient RPC failure. `getTransaction` errors are retried with a short backoff; after five consecutive failures, or when the confirmation window ends, polling throws `SubmissionTimeoutError` carrying the hash (and the last RPC error as `cause`) instead of the Stellar SDK's bare error. A `FAILED` status still rejects immediately.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

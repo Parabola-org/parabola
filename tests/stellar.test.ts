@@ -7,6 +7,7 @@ import {
   checkStellarRecipientReady,
 } from "../src/chains/stellar.js";
 import { STELLAR_TESTNET } from "../src/constants.js";
+import { SubmissionTimeoutError } from "../src/errors.js";
 import { stellarAddressToBytes32 } from "../src/utils/encoding.js";
 
 function contractIdOf(contract: Contract): string {
@@ -239,5 +240,99 @@ describe("mintAndForwardOnStellar (CctpForwarder.mint_and_forward)", () => {
     expect(callSpy).toHaveBeenCalledTimes(1);
     expect(contractIdOf(callSpy.mock.instances[0] as unknown as Contract)).toBe(STELLAR_TESTNET.cctpForwarder);
     expect(callSpy.mock.calls[0]?.[0]).toBe("mint_and_forward");
+  });
+});
+
+describe("Stellar confirmation polling (pollTransactionStatus via burnUsdcOnStellar)", () => {
+  const RPC_BLIP = new Error("socket hang up");
+
+  function burn(signerKeypair: Keypair) {
+    return burnUsdcOnStellar({
+      amountRaw: 10_000_000n,
+      destinationDomain: 26,
+      mintRecipientBytes32: stellarAddressToBytes32(Keypair.random().publicKey()),
+      maxFeeRaw: 1000n,
+      minFinalityThreshold: 2000,
+      signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+      network: "testnet",
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rides out transient getTransaction failures and resolves with the hash", async () => {
+    vi.useFakeTimers();
+    const signerKeypair = mockHappyPathRpc();
+    const getTransaction = vi
+      .spyOn(rpc.Server.prototype, "getTransaction")
+      .mockRejectedValueOnce(RPC_BLIP)
+      .mockRejectedValueOnce(RPC_BLIP)
+      .mockRejectedValueOnce(RPC_BLIP)
+      .mockRejectedValueOnce(RPC_BLIP)
+      .mockResolvedValue({ status: "SUCCESS" } as any);
+
+    const result = burn(signerKeypair);
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toBe(FAKE_HASH);
+    expect(getTransaction).toHaveBeenCalledTimes(5);
+  });
+
+  it("rejects with SubmissionTimeoutError carrying the hash when getTransaction keeps failing", async () => {
+    vi.useFakeTimers();
+    const signerKeypair = mockHappyPathRpc();
+    const getTransaction = vi.spyOn(rpc.Server.prototype, "getTransaction").mockRejectedValue(RPC_BLIP);
+
+    const result = burn(signerKeypair).catch((err: unknown) => err);
+    await vi.runAllTimersAsync();
+    const err = await result;
+
+    expect(err).toBeInstanceOf(SubmissionTimeoutError);
+    expect((err as SubmissionTimeoutError).hash).toBe(FAKE_HASH);
+    expect((err as SubmissionTimeoutError).cause).toBe(RPC_BLIP);
+    expect((err as Error).message).toMatch(/5 consecutive RPC failures \(last: socket hang up\)/);
+    expect(getTransaction).toHaveBeenCalledTimes(5);
+  });
+
+  it("counts only consecutive failures: a successful read resets the counter", async () => {
+    vi.useFakeTimers();
+    const signerKeypair = mockHappyPathRpc();
+    const getTransaction = vi.spyOn(rpc.Server.prototype, "getTransaction");
+    for (let i = 0; i < 4; i++) getTransaction.mockRejectedValueOnce(RPC_BLIP);
+    getTransaction.mockResolvedValueOnce({ status: "NOT_FOUND" } as any);
+    for (let i = 0; i < 4; i++) getTransaction.mockRejectedValueOnce(RPC_BLIP);
+    getTransaction.mockResolvedValue({ status: "SUCCESS" } as any);
+
+    const result = burn(signerKeypair);
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toBe(FAKE_HASH);
+    expect(getTransaction).toHaveBeenCalledTimes(10);
+  });
+
+  it("still rejects immediately on a FAILED status without retrying", async () => {
+    const signerKeypair = mockHappyPathRpc();
+    const getTransaction = vi
+      .spyOn(rpc.Server.prototype, "getTransaction")
+      .mockResolvedValue({ status: "FAILED" } as any);
+
+    await expect(burn(signerKeypair)).rejects.toThrow(`Stellar transaction ${FAKE_HASH} failed`);
+    expect(getTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws SubmissionTimeoutError with the hash when confirmation never arrives", async () => {
+    vi.useFakeTimers();
+    const signerKeypair = mockHappyPathRpc();
+    vi.spyOn(rpc.Server.prototype, "getTransaction").mockResolvedValue({ status: "NOT_FOUND" } as any);
+
+    const result = burn(signerKeypair).catch((err: unknown) => err);
+    await vi.runAllTimersAsync();
+    const err = await result;
+
+    expect(err).toBeInstanceOf(SubmissionTimeoutError);
+    expect((err as SubmissionTimeoutError).hash).toBe(FAKE_HASH);
+    expect((err as Error).message).toMatch(/Timed out waiting/);
   });
 });
