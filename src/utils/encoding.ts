@@ -24,10 +24,19 @@ export function stellarAddressToBytes32(address: string): `0x${string}` {
   return pad(toHex(raw), { size: 32 });
 }
 
-/** Inverse of stellarAddressToBytes32 for ed25519 public keys (G... accounts). */
+const BYTES32_HEX_PATTERN = /^0x[a-fA-F0-9]{64}$/;
+
+/**
+ * Inverse of stellarAddressToBytes32 for ed25519 public keys (G... accounts).
+ * Because a raw 32-byte payload carries no strkey version byte, contract (C...)
+ * addresses cannot be distinguished from G... public keys and are not produced here;
+ * use StrKey.encodeContract directly when decoding a known contract ID.
+ */
 export function bytes32ToStellarAddress(bytes32: `0x${string}`): string {
-  const hex = bytes32.startsWith("0x") ? bytes32.slice(2) : bytes32;
-  const raw = Buffer.from(hex, "hex");
+  if (!BYTES32_HEX_PATTERN.test(bytes32)) {
+    throw new Error(`Invalid bytes32 hex string: ${bytes32}`);
+  }
+  const raw = Buffer.from(bytes32.slice(2), "hex");
   return StrKey.encodeEd25519PublicKey(raw);
 }
 
