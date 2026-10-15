@@ -163,3 +163,40 @@ describe("completeMint direction and signer", () => {
     expect(wrong.to).toBe("arc");
   });
 });
+
+describe("transfer progress event types", () => {
+  it("narrows stage payloads according to the discriminated union", () => {
+    const checkEvent = {
+      stage: "recipient-check",
+      timestamp: Date.now(),
+    } satisfies import("../src/types.js").TransferProgressEvent;
+
+    // @ts-expect-error recipient-check stage does not have burnTxHash
+    const _missingHash = checkEvent.burnTxHash;
+
+    const burnEvent = {
+      stage: "burn-submitted",
+      burnTxHash: "0xburnhash",
+      timestamp: Date.now(),
+    } satisfies import("../src/types.js").TransferProgressEvent;
+
+    expect(burnEvent.burnTxHash).toBe("0xburnhash");
+
+    const mintConfirmed = {
+      stage: "mint-confirmed",
+      burnTxHash: "0xburnhash",
+      attestationHash: "0xattestation",
+      mintTxHash: "0xminthash",
+      timestamp: Date.now(),
+    } satisfies import("../src/types.js").TransferProgressEvent;
+
+    expect(mintConfirmed.mintTxHash).toBe("0xminthash");
+  });
+
+  it("allows onProgress in transfer options", () => {
+    const optionsWithProgress: import("../src/types.js").TransferOptionsBase = {
+      onProgress: (_event) => {},
+    };
+    expect(typeof optionsWithProgress.onProgress).toBe("function");
+  });
+});

@@ -34,6 +34,84 @@ export type StellarSigner = { publicKey: string } & (
 
 export type Signer = ArcSigner | StellarSigner;
 
+/**
+ * Stages of a cross-chain transfer lifecycle emitted via `onProgress`.
+ */
+export type TransferProgressStage =
+  | "recipient-check"
+  | "approve"
+  | "burn-submitted"
+  | "burn-confirmed"
+  | "attestation"
+  | "mint-submitted"
+  | "mint-confirmed";
+
+/** Emitted before checking whether the destination recipient account exists and has a USDC trustline. */
+export interface RecipientCheckProgressEvent {
+  stage: "recipient-check";
+  timestamp: number;
+}
+
+/** Emitted before submitting the token approval transaction on the source chain. */
+export interface ApproveProgressEvent {
+  stage: "approve";
+  timestamp: number;
+}
+
+/** Emitted once the burn transaction has been submitted to the source chain network. */
+export interface BurnSubmittedProgressEvent {
+  stage: "burn-submitted";
+  burnTxHash: string;
+  timestamp: number;
+}
+
+/** Emitted once the burn transaction receipt has been confirmed on the source chain. */
+export interface BurnConfirmedProgressEvent {
+  stage: "burn-confirmed";
+  burnTxHash: string;
+  timestamp: number;
+}
+
+/** Emitted when polling Iris for Circle's CCTP attestation begins. */
+export interface AttestationProgressEvent {
+  stage: "attestation";
+  burnTxHash: string;
+  attestationHash?: string;
+  timestamp: number;
+}
+
+/** Emitted before submitting the mint transaction on the destination chain. */
+export interface MintSubmittedProgressEvent {
+  stage: "mint-submitted";
+  burnTxHash: string;
+  attestationHash?: string;
+  mintTxHash?: string;
+  timestamp: number;
+}
+
+/** Emitted once the mint transaction has confirmed on the destination chain. */
+export interface MintConfirmedProgressEvent {
+  stage: "mint-confirmed";
+  burnTxHash: string;
+  attestationHash: string;
+  mintTxHash: string;
+  timestamp: number;
+}
+
+/**
+ * Discriminated union of all transfer lifecycle progress events.
+ * Stage payloads carry timestamps and transaction hashes as they become available.
+ * The `burnTxHash` is guaranteed present from the `burn-submitted` stage onward.
+ */
+export type TransferProgressEvent =
+  | RecipientCheckProgressEvent
+  | ApproveProgressEvent
+  | BurnSubmittedProgressEvent
+  | BurnConfirmedProgressEvent
+  | AttestationProgressEvent
+  | MintSubmittedProgressEvent
+  | MintConfirmedProgressEvent;
+
 export interface TransferOptionsBase {
   /** Max USDC fee tolerated for a fast transfer. Falls back to standard if the quoted fee exceeds this. */
   maxFee?: string;
@@ -53,6 +131,12 @@ export interface TransferOptionsBase {
    * client broadcasts. No effect on Stellar.
    */
   arcRpcUrl?: string;
+  /**
+   * Optional progress callback invoked as the transfer advances through its lifecycle stages.
+   * Any exceptions thrown by this callback are swallowed to ensure caller observer errors
+   * never interrupt or alter the transfer result.
+   */
+  onProgress?: (event: TransferProgressEvent) => void;
 }
 
 /**
@@ -143,6 +227,8 @@ export interface CompleteMintOptions {
   stellarRpcUrl?: string;
   /** Overrides the Arc RPC URL. No effect on Stellar. */
   arcRpcUrl?: string;
+  /** Optional progress callback matching TransferOptions. */
+  onProgress?: (event: TransferProgressEvent) => void;
 }
 
 /**
