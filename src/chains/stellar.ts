@@ -68,10 +68,35 @@ async function invokeContract(
   return pollTransactionStatus(server, sendResult.hash);
 }
 
-async function pollTransactionStatus(server: rpc.Server, hash: string): Promise<string> {
+/**
+ * Consecutive transient RPC failures tolerated before giving up early. A single
+ * connection reset or 5xx from the Soroban RPC is normal and must not drop the
+ * hash of an already-broadcast transaction. Sustained failure is surfaced via
+ * SubmissionTimeoutError (carrying the hash), consistent with IRIS_MAX_CONSECUTIVE_FAILURES
+ * in src/iris/poll.ts.
+ */
+export const STELLAR_MAX_CONSECUTIVE_FAILURES = 5;
+/** Short backoff between retries of transient getTransaction failures. */
+export const STELLAR_RETRY_BACKOFF_MS = 500;
+
+export async function pollTransactionStatus(server: rpc.Server, hash: string): Promise<string> {
   const deadline = Date.now() + STELLAR_CONFIRMATION_TIMEOUT_MS;
+  let consecutiveFailures = 0;
   while (Date.now() < deadline) {
-    const result = await server.getTransaction(hash);
+    let result;
+    try {
+      result = await server.getTransaction(hash);
+    } catch {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= STELLAR_MAX_CONSECUTIVE_FAILURES) {
+        break;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(STELLAR_RETRY_BACKOFF_MS, Math.max(0, deadline - Date.now()))),
+      );
+      continue;
+    }
+    consecutiveFailures = 0;
     if (result.status === "SUCCESS") return hash;
     if (result.status === "FAILED") {
       throw new Error(`Stellar transaction ${hash} failed`);
