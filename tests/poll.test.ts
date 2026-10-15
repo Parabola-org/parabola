@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchFastTransferFeeBps, pollForAttestation } from "../src/iris/poll.js";
+import {
+  fetchFastTransferFeeBps,
+  getAttestation,
+  pollForAttestation,
+  IRIS_MAX_CONSECUTIVE_FAILURES,
+} from "../src/iris/poll.js";
 import { AttestationNotReadyError, IrisRequestError } from "../src/errors.js";
 
 const COMPLETE_BODY = {
@@ -160,5 +165,58 @@ describe("pollForAttestation", () => {
     const message = await pollForAttestation({ ...POLL, pollInterval: 1, pollTimeout: 5000 });
 
     expect(message.attestation).toBe("0xabc");
+  });
+});
+
+describe("getAttestation", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("retries transient 5xx and transport failures up to IRIS_MAX_CONSECUTIVE_FAILURES and resolves on success", async () => {
+    const calls = scriptFetch([
+      errorResponse(502),
+      errorResponse(503),
+      errorResponse(500),
+      errorResponse(504),
+      okResponse(COMPLETE_BODY),
+    ]);
+
+    const message = await getAttestation(POLL);
+
+    expect(message.attestation).toBe("0xabc");
+    expect(calls.count).toBe(IRIS_MAX_CONSECUTIVE_FAILURES);
+  });
+
+  it("throws IrisRequestError once consecutive failures reach IRIS_MAX_CONSECUTIVE_FAILURES", async () => {
+    const calls = scriptFetch([
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+    ]);
+
+    const err = await getAttestation(POLL).catch((e) => e);
+
+    expect(err).toBeInstanceOf(IrisRequestError);
+    expect((err as IrisRequestError).status).toBe(503);
+    expect(calls.count).toBe(IRIS_MAX_CONSECUTIVE_FAILURES);
+  });
+
+  it("throws AttestationNotReadyError immediately on 404 or empty messages without retrying", async () => {
+    const calls404 = scriptFetch([errorResponse(404), okResponse(COMPLETE_BODY)]);
+
+    const err404 = await getAttestation(POLL).catch((e) => e);
+    expect(err404).toBeInstanceOf(AttestationNotReadyError);
+    expect((err404 as AttestationNotReadyError).burnTxHash).toBe("0xburn");
+    expect(calls404.count).toBe(1);
+
+    const callsEmpty = scriptFetch([okResponse({ messages: [] }), okResponse(COMPLETE_BODY)]);
+    const errEmpty = await getAttestation(POLL).catch((e) => e);
+    expect(errEmpty).toBeInstanceOf(AttestationNotReadyError);
+    expect(callsEmpty.count).toBe(1);
   });
 });

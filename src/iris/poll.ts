@@ -23,17 +23,38 @@ export async function fetchFastTransferFeeBps(
 }
 
 /**
- * Consecutive unusable responses tolerated before polling gives up. A single 5xx or dropped
- * connection is normal against a public API, and failing the whole transfer on one blip
- * would be worse than the outage it reports. Sustained failure is different: it means
- * something polling cannot fix, so it is surfaced rather than hidden behind the deadline.
+ * Consecutive unusable responses tolerated before Iris reads or polling give up. A single
+ * 5xx or dropped connection is normal against a public API, and failing the whole transfer
+ * or burn inspection on one blip would be worse than the outage it reports. Sustained
+ * failure is different: it means something retrying cannot fix, so it is surfaced rather
+ * than hidden behind a deadline.
  */
-const IRIS_MAX_CONSECUTIVE_FAILURES = 5;
+export const IRIS_MAX_CONSECUTIVE_FAILURES = 5;
 
 type PollOutcome =
   | { kind: "message"; message: IrisMessage; complete: boolean }
   | { kind: "not-indexed" }
   | { kind: "failure"; error: IrisRequestError };
+
+/**
+ * Retries a single Iris read across transient `failure` outcomes up to
+ * `IRIS_MAX_CONSECUTIVE_FAILURES`, returning as soon as a non-failure outcome
+ * (`message` or `not-indexed`) is obtained.
+ */
+async function pollWithTransientRetries(
+  url: string,
+  transactionHash: string,
+): Promise<Exclude<PollOutcome, { kind: "failure" }>> {
+  for (let failures = 1; ; failures++) {
+    const outcome = await pollOnce(url, transactionHash);
+    if (outcome.kind !== "failure") {
+      return outcome;
+    }
+    if (failures >= IRIS_MAX_CONSECUTIVE_FAILURES) {
+      throw outcome.error;
+    }
+  }
+}
 
 /**
  * Reads the current attestation state for one burn. Iris answers 404 until it has indexed a
@@ -104,16 +125,13 @@ export async function getAttestation(params: {
   transactionHash: string;
   useSandbox: boolean;
 }): Promise<IrisMessage> {
-  const outcome = await pollOnce(
+  const outcome = await pollWithTransientRetries(
     attestationUrl(params.sourceDomain, params.transactionHash, params.useSandbox),
     params.transactionHash,
   );
 
   if (outcome.kind === "message") {
     return outcome.message;
-  }
-  if (outcome.kind === "failure") {
-    throw outcome.error;
   }
   throw new AttestationNotReadyError(
     `Iris has not indexed burn ${params.transactionHash} yet`,
