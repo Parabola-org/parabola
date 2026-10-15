@@ -278,6 +278,8 @@ Keep a ledger keyed on the burn hash and network, and return the recorded mint t
 
 The distinction that matters most in a service is between a transfer that is merely slow and one that has failed, because those are opposite instructions to your own caller.
 
+The full failure-modes guide — every error class, the recovery example, abort semantics, and `pollTimeout` guidance — lives in [INTEGRATION.md](INTEGRATION.md#failure-modes-and-recovery).
+
 | Error | Meaning | Usual response |
 | --- | --- | --- |
 | `AttestationNotReadyError` | Circle has not attested this burn yet. Retryable. | Retry later, typically `409` |

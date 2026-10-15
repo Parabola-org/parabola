@@ -41,15 +41,28 @@ example of this pattern, specifically
 [`src/lib/arcWallet.ts`](demos/wallet-transfer-demo/src/lib/arcWallet.ts) and
 [`src/lib/stellarWallet.ts`](demos/wallet-transfer-demo/src/lib/stellarWallet.ts).
 
-## What happens when a call fails partway through
+## Failure modes and recovery
 
-`transfer()` burns on the source chain, then polls Circle's Iris service for an attestation. The burn happens first, so a rejection does not mean nothing happened. Every failure after the burn is thrown as a `TransferError` carrying `burnTxHash`, and `attestationHash` when an attestation had already been retrieved. The hash you need in order to recover survives the rejection.
+`transfer()` moves through three stages, and where a failure lands decides what to do next:
 
-Those failures are also separable by type, which is what a service needs, since a transfer that is merely slow and one that has failed are opposite instructions to your own caller:
+1. **Burn** — USDC is burned on the source chain. Failures here leave nothing to recover: the caller has no `burnTxHash` yet.
+2. **Attestation** — Circle's Iris signs the burn. The burn already exists, so the `burnTxHash` is now the recovery handle and must survive every failure.
+3. **Mint** — the attested message is submitted on the destination chain.
 
-- `AttestationNotReadyError`, or a `TransferError` whose `code` is `"ATTESTATION_NOT_READY"`, means Circle has not signed the attestation yet. The transfer is still going to complete. Answer retryably, typically `409`, and let the caller come back.
-- Any other `TransferError` means a real failure after the burn, for example the mint step was rejected. Answer `502`, record `burnTxHash`, and stop.
-- `SubmissionTimeoutError` means a transaction was broadcast but not confirmed in time. `hash` names it. Reconcile against the chain instead of claiming nothing was submitted.
+Every error class exported from the SDK maps to one of those stages:
+
+| Error | Stage | What it means | What to do |
+| --- | --- | --- | --- |
+| `AttestationNotReadyError` | attestation | The burn is real; Circle has not signed it yet. Funds are safe. | Retry later — typically answer `409` and poll again |
+| `TransferError` with `code === "ATTESTATION_NOT_READY"` | attestation | Same condition wrapped by `transfer()`; `burnTxHash` is attached. | Retry later — `completeMint` recovers it |
+| `TransferError` with `code === "ABORTED"` | attestation/mint | Your `options.signal` fired after the burn submitted. | Same as a timeout — `completeMint` on the carried hash |
+| `TransferError` (no `code`) | post-burn | A real failure — e.g. the mint was rejected. | Record `burnTxHash`, answer `502`, recover via `completeMint` |
+| `IrisRequestError` | attestation | Iris is unreachable or unhealthy (5 consecutive failures, or a persistent 5xx). `status` holds the HTTP status when there was a response. | Treat as an upstream outage; retry when Circle recovers |
+| `StellarRpcError` | pre-burn / pre-mint | The Stellar RPC answered a transport/5xx failure while checking the recipient — NOT a missing account. `status` carries the HTTP status when there was one. | Retry; the recipient may be funded and fine |
+| `SubmissionTimeoutError` | submission | A transaction was broadcast but not confirmed in time. `hash` names it — outcome genuinely unknown. | Check the chain before retrying; do not assume it failed |
+| `AbortError` | pre-burn | Your `signal` fired before anything was submitted. | Nothing to recover — start over cleanly |
+
+The one distinction that decides your response: **"funds are safe, retry"** (`AttestationNotReadyError`, `TransferError` with a `code`, `IrisRequestError`, `StellarRpcError`) versus **"outcome unknown, inspect first"** (`SubmissionTimeoutError`). For the first class, waiting and calling again is correct. For the second, a blind retry could double-submit a transaction that is already landing — read the chain state for `hash` before deciding.
 
 Branch on the class and the `code`, never on the message text. Message wording is not part of the API and can change in a patch release:
 
@@ -76,6 +89,55 @@ try {
 ```
 
 A timeout is not the same as a failed attestation. A `404` from Iris means the burn is not indexed yet, which is ordinary during the first seconds after a burn, and polling continues through it. A persistent `5xx` is different again: after five consecutive failures, polling stops with an `IrisRequestError` rather than running out the clock, so an Iris outage does not look identical to a slow attestation. `IrisRequestError.status` holds the HTTP status when there was a response.
+
+### Recovering with `completeMint`
+
+A `TransferError` after the burn always keeps `burnTxHash`. The recovery is the same for both directions — wait for the transient condition to pass, then call `completeMint` with a signer for the **destination** chain (a `StellarSigner` when minting to Stellar, an `ArcSigner` when minting to Arc):
+
+```typescript
+import { transfer, completeMint, TransferError } from "@asctp/parabola";
+
+let burnTxHash: string;
+try {
+  await transfer({
+    from: "arc",
+    to: "stellar",
+    amount: "10",
+    recipient,
+    speed: "standard",
+    signer: arcSigner,
+  });
+} catch (err) {
+  if (!(err instanceof TransferError)) throw err;
+  burnTxHash = err.burnTxHash; // survives the rejection — this is the recovery handle
+}
+
+// Later — same call shape works whether the burn was arc->stellar or stellar->arc;
+// only the signer changes to match the destination chain.
+const { mintTxHash } = await completeMint({
+  from: "arc",
+  to: "stellar",
+  burnTxHash,
+  signer: stellarSigner, // StellarSigner for a Stellar destination; ArcSigner for Arc
+});
+```
+
+### Choosing `pollTimeout`
+
+The default is 300000 ms — five minutes. Attestations normally land within a minute or two, but a slow Circle interval or a congested source chain can stretch that. Guidance:
+
+- **Interactive callers** (a user waiting on a UI): shorter — 60–120 seconds, surface `AttestationNotReadyError` as "still processing" rather than holding the request open.
+- **Backend jobs** that own their own loop: the default is fine; pair it with `pollInterval` only when your RPC budget needs it.
+- **Never set it so low that a normal attestation can't land.** A `TransferError`/`AttestationNotReadyError` out of an expired window is retryable, but an over-tight budget turns a healthy transfer into noise on your error path.
+
+### Aborting a transfer
+
+Every long-running entry point accepts `options.signal` (an `AbortSignal`):
+
+- Abort **before** the burn is submitted: a plain `AbortError` rejects, nothing was broadcast, nothing needs recovery.
+- Abort **after** the burn is on the wire: a `TransferError` whose `code` is `"ABORTED"` rejects, still carrying `burnTxHash` — the burn may complete on-chain even though your call returned, so the recovery path is identical to any other post-burn failure.
+
+The signal is also threaded through Iris attestation polling (each `fetch` receives it), the Stellar recipient check, and the internal transaction-polling loops, so an abort resolves promptly instead of waiting out a deadline.
 
 ## Completing a burn your service did not create
 
