@@ -113,7 +113,7 @@ You do not need funded Arc or Stellar accounts to work on the SDK itself, since 
 5. Confirm the full check suite passes before making any changes:
 
    ```bash
-   pnpm typecheck && pnpm test && pnpm build
+   pnpm typecheck && pnpm lint && pnpm test && pnpm build
    ```
 
 ---
@@ -261,7 +261,7 @@ docs: document completeMint in the README
 
 ## Code Standards
 
-- **Formatting and linting:** must pass `pnpm typecheck` with zero errors.
+- **Formatting and linting:** must pass `pnpm typecheck` and `pnpm lint` with zero errors. `pnpm lint:fix` applies the auto-fixable ones.
 - **Types:** no `any`. Use precise types from `src/types.ts`; narrow `unknown` explicitly.
 - **Naming:**
   - `PascalCase` for types and interfaces
@@ -289,7 +289,7 @@ Every PR must use this structure (the GitHub PR template pre-fills it):
 
 ## Test plan
 
-- [ ] `pnpm typecheck && pnpm test && pnpm build` pass locally
+- [ ] `pnpm typecheck && pnpm lint && pnpm test && pnpm build` pass locally
 - [ ] What you manually verified
 
 Closes #N
@@ -321,6 +321,7 @@ Pull requests are reviewed within 72 hours of submission. You will receive one o
 
 ```bash
 pnpm typecheck        # tsc --noEmit
+pnpm lint             # eslint (typescript-eslint, incl. no-floating-promises)
 pnpm test             # vitest
 pnpm build            # tsup, emits ESM + CJS + type declarations to dist/
 pnpm verify:addresses # confirms src/constants.ts addresses are live on-chain (no funded account needed)

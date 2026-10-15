@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ESLint with `typescript-eslint` (flat config in `eslint.config.mjs`): the recommended rule sets plus `no-floating-promises` and `no-misused-promises`. `pnpm lint` and `pnpm lint:fix` scripts, and a lint step in CI. `tests/lint-rules.fixture.ts` fails lint if either promise rule stops firing.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

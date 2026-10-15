@@ -346,6 +346,7 @@ pnpm install
 pnpm build            # tsup, emits ESM + CJS + type declarations to dist/
 pnpm test             # vitest (mocked, no network access)
 pnpm typecheck        # tsc --noEmit
+pnpm lint             # eslint with typescript-eslint
 pnpm verify:addresses # confirms every address in src/constants.ts is live on-chain (both networks)
 pnpm smoke            # real end-to-end transfer against live testnet (needs funded keys); NETWORK=mainnet moves real funds
 ```
