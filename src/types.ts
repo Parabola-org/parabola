@@ -11,6 +11,48 @@ export type TransferSpeed = "standard" | "fast";
 export type TransferMode = "standard" | "fast";
 export type TransferStatus = "success" | "pending" | "failed";
 
+/** Stage identifier emitted to `options.onProgress` during `transfer()`. */
+export type TransferProgressStage =
+  | "recipient-check"
+  | "approve"
+  | "burn-submitted"
+  | "burn-confirmed"
+  | "attestation"
+  | "mint-submitted"
+  | "mint-confirmed";
+
+interface TransferProgressEventBase {
+  /** Unix epoch timestamp (ms) when the stage event was emitted. */
+  timestamp: number;
+}
+
+/**
+ * Discriminated union of stage progress events emitted by `transfer()` when
+ * `options.onProgress` is supplied. Once the burn has been confirmed, `burnTxHash`
+ * is included on every subsequent event.
+ */
+export type TransferProgressEvent =
+  | (TransferProgressEventBase & { stage: "recipient-check" })
+  | (TransferProgressEventBase & { stage: "approve" })
+  | (TransferProgressEventBase & { stage: "burn-submitted"; burnTxHash?: string })
+  | (TransferProgressEventBase & { stage: "burn-confirmed"; burnTxHash: string })
+  | (TransferProgressEventBase & {
+      stage: "attestation";
+      burnTxHash: string;
+      attestationHash: string;
+    })
+  | (TransferProgressEventBase & {
+      stage: "mint-submitted";
+      burnTxHash: string;
+      attestationHash: string;
+    })
+  | (TransferProgressEventBase & {
+      stage: "mint-confirmed";
+      burnTxHash: string;
+      attestationHash: string;
+      mintTxHash: string;
+    });
+
 /** Signs Arc (EVM) transactions. Wraps a viem WalletClient with an account attached. */
 export interface ArcSigner {
   walletClient: WalletClient;
@@ -53,6 +95,12 @@ export interface TransferOptionsBase {
    * client broadcasts. No effect on Stellar.
    */
   arcRpcUrl?: string;
+  /**
+   * Optional stage-level progress callback invoked at each transfer milestone.
+   * Exceptions thrown by this callback are swallowed so observer errors never
+   * interrupt or fail an in-flight transfer.
+   */
+  onProgress?: (event: TransferProgressEvent) => void;
 }
 
 /**

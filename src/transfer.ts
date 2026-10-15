@@ -2,6 +2,7 @@ import type {
   TransferParams,
   TransferResult,
   TransferMode,
+  TransferProgressEvent,
   ArcSigner,
   StellarSigner,
   ChainId,
@@ -38,6 +39,27 @@ const FAST_ESTIMATED_DURATION_SECONDS = 15;
 
 function domainFor(chain: "arc" | "stellar"): number {
   return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;
+}
+
+type ProgressPayload =
+  | { stage: "recipient-check" }
+  | { stage: "approve" }
+  | { stage: "burn-submitted"; burnTxHash: string }
+  | { stage: "burn-confirmed"; burnTxHash: string }
+  | { stage: "attestation"; burnTxHash: string; attestationHash: string }
+  | { stage: "mint-submitted"; burnTxHash: string; attestationHash: string }
+  | { stage: "mint-confirmed"; burnTxHash: string; attestationHash: string; mintTxHash: string };
+
+function emitProgress(
+  onProgress: ((event: TransferProgressEvent) => void) | undefined,
+  payload: ProgressPayload,
+): void {
+  if (!onProgress) return;
+  try {
+    onProgress({ ...payload, timestamp: Date.now() });
+  } catch {
+    // Observer errors must never interrupt or fail an in-flight transfer.
+  }
 }
 
 export async function transfer(params: TransferParams): Promise<TransferResult> {
@@ -86,6 +108,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     amountRaw,
     maxFeeRaw,
     minFinalityThreshold,
+    onProgress: options.onProgress,
   });
 
   // Everything past this point runs after the source-chain burn has already happened.
@@ -102,11 +125,21 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
       pollTimeout,
     });
     attestationHash = attestation.attestation ?? undefined;
+    emitProgress(options.onProgress, {
+      stage: "attestation",
+      burnTxHash,
+      attestationHash: attestation.attestation ?? "",
+    });
 
     let mintTxHash = "";
     let status: TransferResult["status"] = "pending";
 
     if (options.destinationSigner && attestation.message && attestation.attestation) {
+      emitProgress(options.onProgress, {
+        stage: "mint-submitted",
+        burnTxHash,
+        attestationHash: attestation.attestation,
+      });
       mintTxHash = await mint({
         to: params.to,
         message: attestation.message as `0x${string}`,
@@ -115,6 +148,12 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
         network,
         stellarRpcUrl,
         arcRpcUrl,
+      });
+      emitProgress(options.onProgress, {
+        stage: "mint-confirmed",
+        burnTxHash,
+        attestationHash: attestation.attestation,
+        mintTxHash,
       });
       status = "success";
     }
@@ -146,23 +185,34 @@ async function burn(args: {
   amountRaw: bigint;
   maxFeeRaw: bigint;
   minFinalityThreshold: number;
+  onProgress?: (event: TransferProgressEvent) => void;
 }): Promise<string> {
-  const { params, network, stellarRpcUrl, arcRpcUrl, amountRaw, maxFeeRaw, minFinalityThreshold } =
-    args;
+  const {
+    params,
+    network,
+    stellarRpcUrl,
+    arcRpcUrl,
+    amountRaw,
+    maxFeeRaw,
+    minFinalityThreshold,
+    onProgress,
+  } = args;
 
   if (params.from === "arc") {
     const signer = params.signer;
 
     // Arc is only ever the source of a Stellar-bound transfer here, so the recipient
     // check and the hook encoding are unconditional rather than gated on params.to.
+    emitProgress(onProgress, { stage: "recipient-check" });
     await assertStellarRecipientReady(params.recipient, network, stellarRpcUrl);
 
     // TokenMessengerV2 pulls USDC via transferFrom under the hood; it must be
     // approved to spend at least amountRaw before depositForBurnWithHook will
     // succeed. Approving the exact amount per call avoids leaving a standing
     // allowance beyond what this transfer needs.
+    emitProgress(onProgress, { stage: "approve" });
     await approveUsdcOnArc(signer, amountRaw, network, arcRpcUrl);
-    return runBurn(() => {
+    const burnTxHash = await runBurn(() => {
       const hookData = encodeStellarForwardHook(params.recipient);
       const mintRecipientBytes32 = stellarAddressToBytes32(stellarConfig(network).cctpForwarder);
       return burnUsdcOnArcWithStellarForward({
@@ -177,14 +227,19 @@ async function burn(args: {
         rpcUrl: arcRpcUrl,
       });
     });
+    emitProgress(onProgress, { stage: "burn-submitted", burnTxHash });
+    emitProgress(onProgress, { stage: "burn-confirmed", burnTxHash });
+    return burnTxHash;
   }
 
   const signer = params.signer;
+  emitProgress(onProgress, { stage: "recipient-check" });
   const mintRecipientBytes32 = evmAddressToBytes32(params.recipient);
   // Stellar's SEP-41 USDC token requires the same approve-before-transfer_from
   // pattern as ERC20 on Arc.
+  emitProgress(onProgress, { stage: "approve" });
   await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl);
-  return runBurn(() =>
+  const burnTxHash = await runBurn(() =>
     burnUsdcOnStellar({
       amountRaw,
       destinationDomain: ARC_DOMAIN,
@@ -196,6 +251,9 @@ async function burn(args: {
       rpcUrl: stellarRpcUrl,
     }),
   );
+  emitProgress(onProgress, { stage: "burn-submitted", burnTxHash });
+  emitProgress(onProgress, { stage: "burn-confirmed", burnTxHash });
+  return burnTxHash;
 }
 
 /**

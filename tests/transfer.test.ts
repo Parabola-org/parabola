@@ -666,3 +666,127 @@ describe("transfer fast/standard fee handling", () => {
     expect(result.fee).toBe("0.1");
   });
 });
+
+describe("transfer progress callbacks (options.onProgress)", () => {
+  it("emits the full stage sequence in order with burnTxHash present from burn-submitted onward", async () => {
+    const events: import("../src/index.js").TransferProgressEvent[] = [];
+
+    const result = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: {
+        destinationSigner: stellarSigner,
+        onProgress: (ev) => events.push(ev),
+      },
+    });
+
+    expect(result.status).toBe("success");
+    expect(events.map((e) => e.stage)).toEqual([
+      "recipient-check",
+      "approve",
+      "burn-submitted",
+      "burn-confirmed",
+      "attestation",
+      "mint-submitted",
+      "mint-confirmed",
+    ]);
+
+    for (const ev of events) {
+      expect(typeof ev.timestamp).toBe("number");
+    }
+
+    const postBurnStages = events.slice(2);
+    for (const ev of postBurnStages) {
+      expect("burnTxHash" in ev && ev.burnTxHash).toBe("0xburnhookhash");
+    }
+
+    const attestationEvent = events.find((e) => e.stage === "attestation");
+    expect(attestationEvent).toMatchObject({
+      stage: "attestation",
+      burnTxHash: "0xburnhookhash",
+      attestationHash: "0xattestation",
+    });
+
+    const mintConfirmedEvent = events.find((e) => e.stage === "mint-confirmed");
+    expect(mintConfirmedEvent).toMatchObject({
+      stage: "mint-confirmed",
+      burnTxHash: "0xburnhookhash",
+      attestationHash: "0xattestation",
+      mintTxHash: "stellarminthash",
+    });
+  });
+
+  it("emits stages up through attestation when destinationSigner is omitted (Stellar -> Arc)", async () => {
+    const events: import("../src/index.js").TransferProgressEvent[] = [];
+
+    const result = await transfer({
+      from: "stellar",
+      to: "arc",
+      amount: "25",
+      recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      speed: "standard",
+      signer: stellarSigner,
+      options: {
+        onProgress: (ev) => events.push(ev),
+      },
+    });
+
+    expect(result.status).toBe("pending");
+    expect(events.map((e) => e.stage)).toEqual([
+      "recipient-check",
+      "approve",
+      "burn-submitted",
+      "burn-confirmed",
+      "attestation",
+    ]);
+    for (const ev of events.slice(2)) {
+      expect("burnTxHash" in ev && ev.burnTxHash).toBe("stellarburnhash");
+    }
+  });
+
+  it("swallows callback exceptions without altering transfer success or error handling", async () => {
+    const result = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: {
+        destinationSigner: stellarSigner,
+        onProgress: () => {
+          throw new Error("observer failure");
+        },
+      },
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.mintTxHash).toBe("stellarminthash");
+
+    mintAndForwardOnStellar.mockRejectedValueOnce(new Error("mint RPC failed"));
+    await expect(
+      transfer({
+        from: "arc",
+        to: "stellar",
+        amount: "10",
+        recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+        speed: "standard",
+        signer: arcSigner,
+        options: {
+          destinationSigner: stellarSigner,
+          onProgress: () => {
+            throw new Error("observer failure during mint");
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "TransferError",
+      burnTxHash: "0xburnhookhash",
+      message: "mint RPC failed",
+    });
+  });
+});
