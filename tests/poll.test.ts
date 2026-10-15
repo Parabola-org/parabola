@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchFastTransferFeeBps, pollForAttestation } from "../src/iris/poll.js";
+import { fetchFastTransferFeeBps, pollForAttestation, getAttestation, IRIS_MAX_CONSECUTIVE_FAILURES } from "../src/iris/poll.js";
 import { AttestationNotReadyError, IrisRequestError } from "../src/errors.js";
 
 const COMPLETE_BODY = {
@@ -75,6 +75,94 @@ describe("fetchFastTransferFeeBps", () => {
     }) as unknown as typeof fetch;
 
     await expect(fetchFastTransferFeeBps(26, 27, true)).rejects.toThrow("Iris fees request failed");
+  });
+});
+
+describe("getAttestation", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("returns the message immediately on successful read", async () => {
+    const calls = scriptFetch([okResponse(PENDING_BODY)]);
+
+    const message = await getAttestation(POLL);
+
+    expect(message.status).toBe("pending_confirmations");
+    expect(calls.count).toBe(1);
+  });
+
+  it("throws AttestationNotReadyError on 404 without retrying", async () => {
+    const calls = scriptFetch([errorResponse(404)]);
+
+    const err = await getAttestation(POLL).catch((e) => e);
+
+    expect(err).toBeInstanceOf(AttestationNotReadyError);
+    expect((err as AttestationNotReadyError).burnTxHash).toBe("0xburn");
+    expect(calls.count).toBe(1);
+  });
+
+  it("throws AttestationNotReadyError when response has no messages without retrying", async () => {
+    const calls = scriptFetch([okResponse({ messages: [] })]);
+
+    const err = await getAttestation(POLL).catch((e) => e);
+
+    expect(err).toBeInstanceOf(AttestationNotReadyError);
+    expect(calls.count).toBe(1);
+  });
+
+  it("rides out transient 5xx failures and returns message when a retry succeeds", async () => {
+    const calls = scriptFetch([
+      errorResponse(500),
+      errorResponse(502),
+      okResponse(PENDING_BODY),
+    ]);
+
+    const message = await getAttestation(POLL);
+
+    expect(message.status).toBe("pending_confirmations");
+    expect(calls.count).toBe(3);
+  });
+
+  it("rides out transport errors and returns message when a retry succeeds", async () => {
+    let callCount = 0;
+    global.fetch = vi.fn().mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) throw new Error("ECONNRESET");
+      return okResponse(PENDING_BODY);
+    }) as unknown as typeof fetch;
+
+    const message = await getAttestation(POLL);
+
+    expect(message.status).toBe("pending_confirmations");
+    expect(callCount).toBe(2);
+  });
+
+  it("surfaces persistent 5xx as IrisRequestError when consecutive failures reach limit", async () => {
+    const calls = scriptFetch([
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+    ]);
+
+    const err = await getAttestation(POLL).catch((e) => e);
+
+    expect(err).toBeInstanceOf(IrisRequestError);
+    expect((err as IrisRequestError).status).toBe(503);
+    expect(calls.count).toBe(IRIS_MAX_CONSECUTIVE_FAILURES);
+  });
+
+  it("surfaces persistent transport failure when consecutive failures reach limit", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error("ETIMEDOUT")) as unknown as typeof fetch;
+
+    const err = await getAttestation(POLL).catch((e) => e);
+
+    expect(err).toBeInstanceOf(IrisRequestError);
+    expect((err as IrisRequestError).message).toContain("ETIMEDOUT");
   });
 });
 

@@ -28,7 +28,19 @@ export async function fetchFastTransferFeeBps(
  * would be worse than the outage it reports. Sustained failure is different: it means
  * something polling cannot fix, so it is surfaced rather than hidden behind the deadline.
  */
-const IRIS_MAX_CONSECUTIVE_FAILURES = 5;
+export const IRIS_MAX_CONSECUTIVE_FAILURES = 5;
+
+/**
+ * Handles a transient Iris failure by incrementing the consecutive failure count
+ * and rethrowing when IRIS_MAX_CONSECUTIVE_FAILURES is reached.
+ */
+function recordTransientFailure(error: IrisRequestError, consecutiveFailures: number): number {
+  const nextFailures = consecutiveFailures + 1;
+  if (nextFailures >= IRIS_MAX_CONSECUTIVE_FAILURES) {
+    throw error;
+  }
+  return nextFailures;
+}
 
 type PollOutcome =
   | { kind: "message"; message: IrisMessage; complete: boolean }
@@ -98,27 +110,37 @@ function attestationUrl(sourceDomain: number, transactionHash: string, useSandbo
  * The returned message's `status` says whether the attestation itself is ready. Throws
  * AttestationNotReadyError when Iris has not indexed the burn at all yet, which is a
  * retryable state, and IrisRequestError when Iris is unreachable or unhealthy.
+ *
+ * Tolerates transient Iris failures up to IRIS_MAX_CONSECUTIVE_FAILURES before surfacing
+ * IrisRequestError, matching pollForAttestation's resilience policy.
  */
 export async function getAttestation(params: {
   sourceDomain: number;
   transactionHash: string;
   useSandbox: boolean;
+  retryInterval?: number;
 }): Promise<IrisMessage> {
-  const outcome = await pollOnce(
-    attestationUrl(params.sourceDomain, params.transactionHash, params.useSandbox),
-    params.transactionHash,
-  );
+  const url = attestationUrl(params.sourceDomain, params.transactionHash, params.useSandbox);
+  let consecutiveFailures = 0;
 
-  if (outcome.kind === "message") {
-    return outcome.message;
+  while (true) {
+    const outcome = await pollOnce(url, params.transactionHash);
+
+    if (outcome.kind === "message") {
+      return outcome.message;
+    }
+    if (outcome.kind === "not-indexed") {
+      throw new AttestationNotReadyError(
+        `Iris has not indexed burn ${params.transactionHash} yet`,
+        params.transactionHash,
+      );
+    }
+
+    consecutiveFailures = recordTransientFailure(outcome.error, consecutiveFailures);
+    if (params.retryInterval) {
+      await sleep(params.retryInterval);
+    }
   }
-  if (outcome.kind === "failure") {
-    throw outcome.error;
-  }
-  throw new AttestationNotReadyError(
-    `Iris has not indexed burn ${params.transactionHash} yet`,
-    params.transactionHash,
-  );
 }
 
 /**
@@ -152,10 +174,7 @@ export async function pollForAttestation(params: {
     }
 
     if (outcome.kind === "failure") {
-      consecutiveFailures += 1;
-      if (consecutiveFailures >= IRIS_MAX_CONSECUTIVE_FAILURES) {
-        throw outcome.error;
-      }
+      consecutiveFailures = recordTransientFailure(outcome.error, consecutiveFailures);
     } else {
       consecutiveFailures = 0;
     }
