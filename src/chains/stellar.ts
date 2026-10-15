@@ -68,15 +68,43 @@ async function invokeContract(
   return pollTransactionStatus(server, sendResult.hash);
 }
 
+/**
+ * Consecutive RPC polling failures tolerated before confirmation gives up. A single
+ * 5xx or connection reset is common against a public Soroban RPC endpoint, and
+ * failing on one blip would discard the already-broadcast transaction hash.
+ * Sustained failure or reaching the confirmation deadline surfaces
+ * SubmissionTimeoutError with the hash intact so the caller can still recover.
+ */
+const STELLAR_MAX_CONSECUTIVE_FAILURES = 5;
+const STELLAR_POLL_INTERVAL_MS = 2000;
+
 async function pollTransactionStatus(server: rpc.Server, hash: string): Promise<string> {
   const deadline = Date.now() + STELLAR_CONFIRMATION_TIMEOUT_MS;
+  let consecutiveFailures = 0;
+
   while (Date.now() < deadline) {
-    const result = await server.getTransaction(hash);
+    let result: rpc.Api.GetTransactionResponse;
+    try {
+      result = await server.getTransaction(hash);
+      consecutiveFailures = 0;
+    } catch (err) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= STELLAR_MAX_CONSECUTIVE_FAILURES) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new SubmissionTimeoutError(
+          `Timed out waiting for Stellar transaction ${hash} to confirm after ${consecutiveFailures} consecutive RPC errors: ${reason}`,
+          hash,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, STELLAR_POLL_INTERVAL_MS));
+      continue;
+    }
+
     if (result.status === "SUCCESS") return hash;
     if (result.status === "FAILED") {
       throw new Error(`Stellar transaction ${hash} failed`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, STELLAR_POLL_INTERVAL_MS));
   }
   // The transaction was broadcast (this hash came from a successful sendTransaction);
   // confirmation did not arrive within the timeout. This differs from never having been

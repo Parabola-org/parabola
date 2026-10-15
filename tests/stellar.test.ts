@@ -7,6 +7,7 @@ import {
   checkStellarRecipientReady,
 } from "../src/chains/stellar.js";
 import { STELLAR_TESTNET } from "../src/constants.js";
+import { SubmissionTimeoutError } from "../src/errors.js";
 import { stellarAddressToBytes32 } from "../src/utils/encoding.js";
 
 function contractIdOf(contract: Contract): string {
@@ -36,6 +37,7 @@ function mockHappyPathRpc() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -239,5 +241,81 @@ describe("mintAndForwardOnStellar (CctpForwarder.mint_and_forward)", () => {
     expect(callSpy).toHaveBeenCalledTimes(1);
     expect(contractIdOf(callSpy.mock.instances[0] as unknown as Contract)).toBe(STELLAR_TESTNET.cctpForwarder);
     expect(callSpy.mock.calls[0]?.[0]).toBe("mint_and_forward");
+  });
+});
+
+describe("pollTransactionStatus transient RPC tolerance", () => {
+  it("resolves with the tx hash when getTransaction throws N-1 transient RPC errors then returns SUCCESS", async () => {
+    vi.useFakeTimers();
+    const signerKeypair = mockHappyPathRpc();
+    const getTxSpy = vi
+      .spyOn(rpc.Server.prototype, "getTransaction")
+      .mockRejectedValueOnce(new Error("502 Bad Gateway"))
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockRejectedValueOnce(new Error("503 Service Unavailable"))
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce({ status: "SUCCESS" } as any);
+
+    const recipient = Keypair.random().publicKey();
+    const promise = burnUsdcOnStellar({
+      amountRaw: 10_000_000n,
+      destinationDomain: 26,
+      mintRecipientBytes32: stellarAddressToBytes32(recipient),
+      maxFeeRaw: 1000n,
+      minFinalityThreshold: 2000,
+      signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+      network: "testnet",
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    await expect(promise).resolves.toBe(FAKE_HASH);
+    expect(getTxSpy).toHaveBeenCalledTimes(5);
+  });
+
+  it("rejects with SubmissionTimeoutError preserving hash when getTransaction always throws", async () => {
+    vi.useFakeTimers();
+    const signerKeypair = mockHappyPathRpc();
+    const getTxSpy = vi
+      .spyOn(rpc.Server.prototype, "getTransaction")
+      .mockRejectedValue(new Error("503 Service Unavailable"));
+
+    const recipient = Keypair.random().publicKey();
+    const promise = burnUsdcOnStellar({
+      amountRaw: 10_000_000n,
+      destinationDomain: 26,
+      mintRecipientBytes32: stellarAddressToBytes32(recipient),
+      maxFeeRaw: 1000n,
+      minFinalityThreshold: 2000,
+      signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+      network: "testnet",
+    });
+    const captured = promise.catch((err) => err);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    const err = await captured;
+    expect(err).toBeInstanceOf(SubmissionTimeoutError);
+    expect((err as SubmissionTimeoutError).hash).toBe(FAKE_HASH);
+    expect(getTxSpy).toHaveBeenCalledTimes(5);
+  });
+
+  it("rejects immediately without retrying when getTransaction returns FAILED", async () => {
+    const signerKeypair = mockHappyPathRpc();
+    const getTxSpy = vi
+      .spyOn(rpc.Server.prototype, "getTransaction")
+      .mockResolvedValue({ status: "FAILED" } as any);
+
+    const recipient = Keypair.random().publicKey();
+    await expect(
+      burnUsdcOnStellar({
+        amountRaw: 10_000_000n,
+        destinationDomain: 26,
+        mintRecipientBytes32: stellarAddressToBytes32(recipient),
+        maxFeeRaw: 1000n,
+        minFinalityThreshold: 2000,
+        signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        network: "testnet",
+      }),
+    ).rejects.toThrow(`Stellar transaction ${FAKE_HASH} failed`);
+    expect(getTxSpy).toHaveBeenCalledTimes(1);
   });
 });
