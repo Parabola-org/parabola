@@ -26,7 +26,7 @@ import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from 
 import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
 import { decodeCctpMessage } from "./utils/message.js";
-import { approveUsdcOnArc, burnUsdcOnArcWithStellarForward, receiveMessageOnArc } from "./chains/arc.js";
+import { approveUsdcOnArc, readUsdcAllowanceOnArc, burnUsdcOnArcWithStellarForward, receiveMessageOnArc } from "./chains/arc.js";
 import {
   approveUsdcOnStellar,
   burnUsdcOnStellar,
@@ -138,6 +138,35 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   }
 }
 
+/**
+ * Ensures TokenMessengerV2 has enough allowance to spend amountRaw on the signer's behalf.
+ *
+ * If the current allowance already covers amountRaw from a previous transfer, the approve
+ * transaction is skipped entirely, saving gas and confirmation latency.
+ * If the allowance is insufficient, an exact-amount approve transaction is submitted.
+ *
+ * If reading the allowance fails, we fail closed by submitting the exact-amount approve.
+ */
+async function approveUsdcOnArcIfNeeded(
+  signer: ArcSigner,
+  amountRaw: bigint,
+  network: Network,
+  rpcUrl?: string,
+): Promise<void> {
+  const owner = signer.walletClient.account?.address;
+  if (owner) {
+    try {
+      const currentAllowance = await readUsdcAllowanceOnArc(owner, network, rpcUrl);
+      if (currentAllowance >= amountRaw) {
+        return;
+      }
+    } catch {
+      // Fail closed: if reading allowance fails, fall through to submit approve
+    }
+  }
+  await approveUsdcOnArc(signer, amountRaw, network, rpcUrl);
+}
+
 async function burn(args: {
   params: TransferParams;
   network: Network;
@@ -161,7 +190,10 @@ async function burn(args: {
     // approved to spend at least amountRaw before depositForBurnWithHook will
     // succeed. Approving the exact amount per call avoids leaving a standing
     // allowance beyond what this transfer needs.
-    await approveUsdcOnArc(signer, amountRaw, network, arcRpcUrl);
+    //
+    // If the existing allowance already covers amountRaw from a previous transfer,
+    // skip the approve transaction to save gas and latency.
+    await approveUsdcOnArcIfNeeded(signer, amountRaw, network, arcRpcUrl);
     return runBurn(() => {
       const hookData = encodeStellarForwardHook(params.recipient);
       const mintRecipientBytes32 = stellarAddressToBytes32(stellarConfig(network).cctpForwarder);
