@@ -84,3 +84,23 @@ export class SubmissionTimeoutError extends Error {
     this.hash = hash;
   }
 }
+
+/**
+ * Thrown when the Stellar RPC endpoint cannot be reached or responds with a
+ * transport-level or 5xx/rate-limit failure. An unfunded account is a normal lookup
+ * result, but an RPC outage is an infrastructure problem the caller should retry — not
+ * a missing recipient, and never the "fund the account" remediation path.
+ */
+export class StellarRpcError extends Error {
+  /** HTTP status code when the server responded; undefined when no response arrived (e.g. network failure). */
+  readonly status?: number;
+  /** Underlying cause of the error. */
+  readonly cause?: unknown;
+
+  constructor(message: string, status?: number, cause?: unknown) {
+    super(message, cause !== undefined ? { cause } : undefined);
+    this.name = "StellarRpcError";
+    this.status = status;
+    this.cause = cause;
+  }
+}

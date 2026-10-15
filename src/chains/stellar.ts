@@ -9,7 +9,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { stellarConfig, STELLAR_TX_TIMEOUT_SECONDS, STELLAR_CONFIRMATION_TIMEOUT_MS, STELLAR_INCLUSION_FEE } from "../constants.js";
 import type { StellarSigner, Network } from "../types.js";
-import { SubmissionTimeoutError } from "../errors.js";
+import { SubmissionTimeoutError, StellarRpcError } from "../errors.js";
 
 function getServer(network: Network, rpcUrl?: string): rpc.Server {
   return new rpc.Server(rpcUrl ?? stellarConfig(network).sorobanRpcUrl);
@@ -133,13 +133,73 @@ export interface StellarRecipientStatus {
 
 const MISSING_TRUSTLINE_MESSAGE = "trustline entry is missing for account";
 
+function extractHttpStatus(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const record = err as Record<string, unknown>;
+  for (const key of ["status", "statusCode", "code"]) {
+    const val = record[key];
+    if (typeof val === "number" && Number.isFinite(val)) return val;
+    if (typeof val === "string" && /^\d{3}$/.test(val)) return Number(val);
+  }
+  const response = record["response"];
+  if (typeof response === "object" && response !== null) {
+    const status = (response as Record<string, unknown>)["status"];
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+  }
+  return undefined;
+}
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Returns true if the error represents a genuine "account not found" on-chain state,
+ * as opposed to an infrastructure failure (transport error, 5xx, rate limit).
+ */
+function isAccountNotFoundError(err: unknown): boolean {
+  const status = extractHttpStatus(err);
+  if (status !== undefined && (status >= 500 || status === 429)) {
+    return false;
+  }
+  if (status === 404) {
+    return true;
+  }
+
+  if (typeof err === "object" && err !== null) {
+    const name = (err as Record<string, unknown>)["name"];
+    if (name === "NotFoundError") return true;
+  }
+
+  const message = extractErrorMessage(err).toLowerCase();
+  if (
+    message.includes("fetch failed") ||
+    message.includes("econnrefused") ||
+    message.includes("etimedout") ||
+    message.includes("timeout") ||
+    message.includes("socket hang up") ||
+    message.includes("network")
+  ) {
+    return false;
+  }
+
+  if (message.includes("account not found") || message.includes("could not find account")) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Checks whether a Stellar account can receive USDC: it must exist on-ledger (accounts do
  * not exist until minimally funded with XLM) and hold a trustline for the USDC asset. An
- * unfunded account causes server.getAccount() to throw "Account not found"; a funded
- * account without a USDC trustline causes the balance() simulation to fail with
- * Error(Contract, #13) / "trustline entry is missing for account" rather than returning a
- * zero balance.
+ * unfunded account causes server.getAccount() to throw an account-not-found error, returning
+ * { exists: false }.
+ *
+ * Infrastructure errors (DNS errors, RPC 503, rate limits, transport failures) are not
+ * swallowed and instead propagate as StellarRpcError so callers can retry rather than
+ * instructing users to fund an account that may already exist.
  */
 export async function checkStellarRecipientReady(
   recipient: string,
@@ -152,8 +212,17 @@ export async function checkStellarRecipientReady(
   let account;
   try {
     account = await server.getAccount(recipient);
-  } catch {
-    return { exists: false, hasTrustline: false, ready: false };
+  } catch (err) {
+    if (isAccountNotFoundError(err)) {
+      return { exists: false, hasTrustline: false, ready: false };
+    }
+    const status = extractHttpStatus(err);
+    const detail = extractErrorMessage(err);
+    throw new StellarRpcError(
+      `Stellar RPC request failed while checking recipient ${recipient}${status ? ` (status ${status})` : ""}: ${detail}`,
+      status,
+      err,
+    );
   }
 
   const contract = new Contract(stellar.usdc);
