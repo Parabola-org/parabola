@@ -33,7 +33,7 @@ vi.mock("../src/iris/poll.js", () => ({
 }));
 
 const { transfer, completeMint, resolveBurn } = await import("../src/transfer.js");
-const { TransferError, SubmissionTimeoutError, AttestationNotReadyError } = await import(
+const { TransferError, SubmissionTimeoutError, AttestationNotReadyError, StellarRpcError } = await import(
   "../src/errors.js"
 );
 const { encodeStellarForwardHook } = await import("../src/utils/encoding.js");
@@ -220,6 +220,27 @@ describe("transfer (Arc -> Stellar)", () => {
       }),
     ).rejects.toThrow(/does not exist yet/);
 
+    expect(approveUsdcOnArc).not.toHaveBeenCalled();
+    expect(burnUsdcOnArcWithStellarForward).not.toHaveBeenCalled();
+  });
+
+  it("propagates a Stellar RPC failure from the recipient check instead of reporting a missing account", async () => {
+    checkStellarRecipientReady.mockRejectedValue(
+      new StellarRpcError("Stellar RPC request for account G... failed: fetch failed"),
+    );
+
+    const promise = transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: { destinationSigner: stellarSigner },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(StellarRpcError);
+    await expect(promise).rejects.not.toThrow(/does not exist yet/);
     expect(approveUsdcOnArc).not.toHaveBeenCalled();
     expect(burnUsdcOnArcWithStellarForward).not.toHaveBeenCalled();
   });

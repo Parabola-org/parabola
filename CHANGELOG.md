@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `checkStellarRecipientReady` no longer reports a Stellar RPC outage as a missing account. It reads the account with `getLedgerEntries` instead of `getAccount()`, which rethrows every RPC failure as "Account not found", so only an empty ledger result yields `exists: false`. Transport errors, 5xx responses and rate limits now reject with the new `StellarRpcError`, and `transfer()` no longer tells the caller to fund an account that may already exist.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

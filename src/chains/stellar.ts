@@ -1,15 +1,18 @@
 import {
+  Account,
   Contract,
+  Keypair,
   TransactionBuilder,
   BASE_FEE,
   Address,
   nativeToScVal,
   scValToNative,
   rpc,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { stellarConfig, STELLAR_TX_TIMEOUT_SECONDS, STELLAR_CONFIRMATION_TIMEOUT_MS, STELLAR_INCLUSION_FEE } from "../constants.js";
 import type { StellarSigner, Network } from "../types.js";
-import { SubmissionTimeoutError } from "../errors.js";
+import { SubmissionTimeoutError, StellarRpcError } from "../errors.js";
 
 function getServer(network: Network, rpcUrl?: string): rpc.Server {
   return new rpc.Server(rpcUrl ?? stellarConfig(network).sorobanRpcUrl);
@@ -134,12 +137,46 @@ export interface StellarRecipientStatus {
 const MISSING_TRUSTLINE_MESSAGE = "trustline entry is missing for account";
 
 /**
+ * Loads a Stellar account, or returns undefined when it does not exist on-ledger.
+ *
+ * server.getAccount() is not used here: it catches every failure from the underlying
+ * getLedgerEntries call (transport errors, 5xx, rate limits) and rethrows them all as
+ * "Account not found", so an RPC outage would look exactly like an unfunded account.
+ * Calling getLedgerEntries directly keeps the two apart: an empty result is the RPC's
+ * definitive "no such account", and a rejection is an infrastructure failure.
+ */
+async function loadAccountIfExists(
+  server: rpc.Server,
+  address: string,
+): Promise<Account | undefined> {
+  const key = xdr.LedgerKey.account(
+    new xdr.LedgerKeyAccount({ accountId: Keypair.fromPublicKey(address).xdrPublicKey() }),
+  );
+
+  let response;
+  try {
+    response = await server.getLedgerEntries(key);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new StellarRpcError(`Stellar RPC request for account ${address} failed: ${detail}`, err);
+  }
+
+  const entry = response.entries[0];
+  if (!entry) {
+    return undefined;
+  }
+  return new Account(address, entry.val.account().seqNum().toString());
+}
+
+/**
  * Checks whether a Stellar account can receive USDC: it must exist on-ledger (accounts do
  * not exist until minimally funded with XLM) and hold a trustline for the USDC asset. An
- * unfunded account causes server.getAccount() to throw "Account not found"; a funded
- * account without a USDC trustline causes the balance() simulation to fail with
- * Error(Contract, #13) / "trustline entry is missing for account" rather than returning a
- * zero balance.
+ * unfunded account has no ledger entry; a funded account without a USDC trustline causes
+ * the balance() simulation to fail with Error(Contract, #13) / "trustline entry is missing
+ * for account" rather than returning a zero balance.
+ *
+ * Throws StellarRpcError when the RPC itself fails, instead of reporting the account as
+ * missing, so callers can retry rather than tell a user to fund an account that exists.
  */
 export async function checkStellarRecipientReady(
   recipient: string,
@@ -149,10 +186,8 @@ export async function checkStellarRecipientReady(
   const stellar = stellarConfig(network);
   const server = getServer(network, rpcUrl);
 
-  let account;
-  try {
-    account = await server.getAccount(recipient);
-  } catch {
+  const account = await loadAccountIfExists(server, recipient);
+  if (!account) {
     return { exists: false, hasTrustline: false, ready: false };
   }
 

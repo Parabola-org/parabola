@@ -84,3 +84,16 @@ export class SubmissionTimeoutError extends Error {
     this.hash = hash;
   }
 }
+
+/**
+ * Thrown when a Stellar RPC call failed for an infrastructure reason (transport error,
+ * DNS failure, 5xx, rate limiting) rather than returning an answer. Without this, an RPC
+ * outage during the recipient check is indistinguishable from an account that was never
+ * funded, and callers are told to fund an account that may already exist. Retryable.
+ */
+export class StellarRpcError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = "StellarRpcError";
+  }
+}

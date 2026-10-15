@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { Account, Contract, Keypair, StrKey, nativeToScVal, rpc } from "@stellar/stellar-sdk";
+import { StellarRpcError } from "../src/errors.js";
 import {
   burnUsdcOnStellar,
   mintAndForwardOnStellar,
@@ -8,6 +9,14 @@ import {
 } from "../src/chains/stellar.js";
 import { STELLAR_TESTNET } from "../src/constants.js";
 import { stellarAddressToBytes32 } from "../src/utils/encoding.js";
+
+/** Mocks getLedgerEntries as if the account exists on-ledger with the given sequence number. */
+function mockExistingAccount(sequence = "1") {
+  return vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({
+    latestLedger: 1,
+    entries: [{ val: { account: () => ({ seqNum: () => ({ toString: () => sequence }) }) } }],
+  } as any);
+}
 
 function contractIdOf(contract: Contract): string {
   return StrKey.encodeContract((contract as unknown as { _id: Buffer })._id);
@@ -172,19 +181,57 @@ describe("approveUsdcOnStellar", () => {
 });
 
 describe("checkStellarRecipientReady", () => {
-  it("reports not-existing when the account has never been funded", async () => {
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockRejectedValue(
-      new Error("Account not found: G..."),
-    );
+  it("reports not-existing when the RPC has no ledger entry for the account", async () => {
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({
+      latestLedger: 1,
+      entries: [],
+    } as any);
 
     const status = await checkStellarRecipientReady(Keypair.random().publicKey());
 
     expect(status).toEqual({ exists: false, hasTrustline: false, ready: false });
   });
 
+  it("rejects with StellarRpcError on a transport failure instead of reporting not-existing", async () => {
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockRejectedValue(
+      new TypeError("fetch failed"),
+    );
+
+    const promise = checkStellarRecipientReady(Keypair.random().publicKey());
+
+    await expect(promise).rejects.toBeInstanceOf(StellarRpcError);
+    await expect(promise).rejects.toThrow(/fetch failed/);
+  });
+
+  it("rejects with StellarRpcError on a 5xx response instead of reporting not-existing", async () => {
+    const httpError = Object.assign(new Error("Request failed with status code 503"), {
+      response: { status: 503 },
+    });
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockRejectedValue(httpError);
+    const simulate = vi.spyOn(rpc.Server.prototype, "simulateTransaction");
+
+    const promise = checkStellarRecipientReady(Keypair.random().publicKey());
+
+    await expect(promise).rejects.toBeInstanceOf(StellarRpcError);
+    await expect(promise).rejects.toMatchObject({ cause: httpError });
+    expect(simulate).not.toHaveBeenCalled();
+  });
+
+  it("does not use getAccount, which maps every RPC failure to 'Account not found'", async () => {
+    const getAccount = vi.spyOn(rpc.Server.prototype, "getAccount");
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({
+      latestLedger: 1,
+      entries: [],
+    } as any);
+
+    await checkStellarRecipientReady(Keypair.random().publicKey());
+
+    expect(getAccount).not.toHaveBeenCalled();
+  });
+
   it("reports missing-trustline when the account exists but has never held USDC", async () => {
     const recipient = Keypair.random().publicKey();
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
+    mockExistingAccount();
     vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
       error:
         'HostError: Error(Contract, #13)\n\nEvent log (newest first):\n   0: [Diagnostic Event] ... data:["trustline entry is missing for account", "' +
@@ -199,7 +246,7 @@ describe("checkStellarRecipientReady", () => {
 
   it("reports ready when the account exists and holds the USDC trustline", async () => {
     const recipient = Keypair.random().publicKey();
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
+    mockExistingAccount();
     vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
       transactionData: {},
       result: { retval: nativeToScVal(0n, { type: "i128" }) },
@@ -212,7 +259,7 @@ describe("checkStellarRecipientReady", () => {
 
   it("rethrows an unrelated simulation error instead of misreporting it as a missing trustline", async () => {
     const recipient = Keypair.random().publicKey();
-    vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
+    mockExistingAccount();
     vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
       error: "HostError: some unrelated simulation failure",
     } as any);

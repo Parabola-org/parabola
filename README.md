@@ -285,6 +285,7 @@ The distinction that matters most in a service is between a transfer that is mer
 | `TransferError` without a code | A real failure after the burn, for example the mint step was rejected. | Stop, typically `502` |
 | `SubmissionTimeoutError` | A transaction was broadcast but not confirmed in time. `hash` names it. | Reconcile against the chain |
 | `IrisRequestError` | Circle's Iris API returned a non-OK response or the request failed. `status` holds the HTTP status when there was a response. | Treat as an upstream outage |
+| `StellarRpcError` | A Stellar RPC call failed (transport error, 5xx, rate limit) while checking the recipient, so whether the account exists is unknown. `cause` holds the original error. | Retry, or switch `stellarRpcUrl` |
 
 `transfer()` burns on the source chain before it polls for an attestation, so a rejection does not mean nothing happened. Any failure after the burn is thrown as a `TransferError` carrying `burnTxHash`, so you always keep the hash you need to recover:
 
