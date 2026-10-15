@@ -14,14 +14,20 @@
     "url": "https://github.com/ASCTP/parabola/issues"
   },
   "homepage": "https://github.com/ASCTP/parabola#readme",
+  "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "files": [
@@ -39,6 +45,7 @@
     "typecheck": "tsc --noEmit",
     "verify:addresses": "node scripts/verify-contract-addresses.mjs",
     "smoke": "node scripts/testnet-smoke.mjs",
+    "publint": "publint",
     "dev:wallet-transfer-demo": "pnpm --filter wallet-transfer-demo dev"
   },
   "keywords": [
@@ -56,6 +63,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "publint": "^0.3.0",
     "tsup": "^8.3.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
