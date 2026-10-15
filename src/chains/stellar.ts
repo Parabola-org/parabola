@@ -152,8 +152,12 @@ export async function checkStellarRecipientReady(
   let account;
   try {
     account = await server.getAccount(recipient);
-  } catch {
-    return { exists: false, hasTrustline: false, ready: false };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Account not found")) {
+      return { exists: false, hasTrustline: false, ready: false };
+    }
+    throw err;
   }
 
   const contract = new Contract(stellar.usdc);

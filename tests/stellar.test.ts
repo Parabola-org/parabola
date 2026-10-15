@@ -210,6 +210,16 @@ describe("checkStellarRecipientReady", () => {
     expect(status).toEqual({ exists: true, hasTrustline: true, ready: true });
   });
 
+  it("throws on RPC errors instead of misreporting as missing account", async () => {
+    vi.spyOn(rpc.Server.prototype, "getAccount").mockRejectedValue(
+      new Error("Network error: connection refused"),
+    );
+
+    await expect(checkStellarRecipientReady(Keypair.random().publicKey())).rejects.toThrow(
+      "Network error: connection refused",
+    );
+  });
+
   it("rethrows an unrelated simulation error instead of misreporting it as a missing trustline", async () => {
     const recipient = Keypair.random().publicKey();
     vi.spyOn(rpc.Server.prototype, "getAccount").mockResolvedValue(new Account(recipient, "1"));
