@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { decimalsForChain, toRawAmount, fromRawAmount } from "../src/utils/amount.js";
+import { convertPrecision } from "../src/index.js";
 import { ARC_TESTNET, STELLAR_TESTNET } from "../src/constants.js";
 
 describe("decimalsForChain", () => {
@@ -49,5 +50,43 @@ describe("fromRawAmount", () => {
       const raw = toRawAmount("42.5", chain);
       expect(fromRawAmount(raw, chain)).toBe("42.5");
     }
+  });
+});
+
+describe("convertPrecision (6 <-> 7 decimal round-trips)", () => {
+  const arcDecimals = decimalsForChain("arc"); // 6
+  const stellarDecimals = decimalsForChain("stellar"); // 7
+
+  it("upscales 6-decimal Arc subunits to 7-decimal Stellar subunits and round-trips exactly", () => {
+    const arcRaw = toRawAmount("1234.567891", "arc"); // 1_234_567_891n
+    expect(arcRaw).toBe(1_234_567_891n);
+
+    const stellarRaw = convertPrecision(arcRaw, arcDecimals, stellarDecimals);
+    expect(stellarRaw).toBe(12_345_678_910n);
+    expect(fromRawAmount(stellarRaw, "stellar")).toBe("1234.567891");
+
+    const roundTripped = convertPrecision(stellarRaw, stellarDecimals, arcDecimals);
+    expect(roundTripped).toBe(1_234_567_891n);
+    expect(fromRawAmount(roundTripped, "arc")).toBe("1234.567891");
+  });
+
+  it("downscales 7-decimal Stellar subunits to 6-decimal Arc subunits, truncating excess precision on round-trip", () => {
+    const stellarRaw = toRawAmount("999999.9999999", "stellar"); // 9_999_999_999_999n
+    expect(stellarRaw).toBe(9_999_999_999_999n);
+
+    const arcRaw = convertPrecision(stellarRaw, stellarDecimals, arcDecimals);
+    expect(arcRaw).toBe(999_999_999_999n);
+    expect(fromRawAmount(arcRaw, "arc")).toBe("999999.999999");
+
+    const upscaledBack = convertPrecision(arcRaw, arcDecimals, stellarDecimals);
+    expect(upscaledBack).toBe(9_999_999_999_990n);
+    expect(fromRawAmount(upscaledBack, "stellar")).toBe("999999.999999");
+  });
+
+  it("preserves zero and identity conversions across matching decimals", () => {
+    expect(convertPrecision(0n, arcDecimals, stellarDecimals)).toBe(0n);
+    expect(convertPrecision(0n, stellarDecimals, arcDecimals)).toBe(0n);
+    expect(convertPrecision(42_000_000n, arcDecimals, arcDecimals)).toBe(42_000_000n);
+    expect(convertPrecision(420_000_000n, stellarDecimals, stellarDecimals)).toBe(420_000_000n);
   });
 });
