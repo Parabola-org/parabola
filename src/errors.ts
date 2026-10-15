@@ -68,6 +68,26 @@ export class IrisRequestError extends Error {
 }
 
 /**
+ * Thrown when a Stellar RPC request fails for infrastructure reasons (transport error,
+ * 5xx, rate limit) while checking a recipient. Without this, an RPC outage is
+ * indistinguishable from an unfunded account, and callers tell users to fund an
+ * account that may already exist instead of retrying.
+ */
+export class StellarRpcError extends Error {
+  /** HTTP status, or undefined when the request failed before a response arrived. */
+  readonly status?: number;
+  /** Underlying SDK/transport error, preserved for retry logic and debugging. */
+  readonly cause?: unknown;
+
+  constructor(message: string, status?: number, cause?: unknown) {
+    super(message, cause !== undefined ? { cause } : undefined);
+    this.name = "StellarRpcError";
+    this.status = status;
+    this.cause = cause;
+  }
+}
+
+/**
  * Thrown when a transaction was broadcast (a hash exists) but the SDK gave up waiting
  * for on-chain confirmation before it could tell whether it landed. This is genuine
  * uncertainty, not "nothing happened": the transaction may still succeed or fail on

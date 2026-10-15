@@ -9,7 +9,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { stellarConfig, STELLAR_TX_TIMEOUT_SECONDS, STELLAR_CONFIRMATION_TIMEOUT_MS, STELLAR_INCLUSION_FEE } from "../constants.js";
 import type { StellarSigner, Network } from "../types.js";
-import { SubmissionTimeoutError } from "../errors.js";
+import { SubmissionTimeoutError, StellarRpcError } from "../errors.js";
 
 function getServer(network: Network, rpcUrl?: string): rpc.Server {
   return new rpc.Server(rpcUrl ?? stellarConfig(network).sorobanRpcUrl);
@@ -133,6 +133,47 @@ export interface StellarRecipientStatus {
 
 const MISSING_TRUSTLINE_MESSAGE = "trustline entry is missing for account";
 
+function getErrorStatus(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const record = err as Record<string, unknown>;
+  for (const key of ["status", "statusCode", "code"]) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && /^\d{3}$/.test(value)) return Number(value);
+  }
+  const response = record["response"];
+  if (typeof response === "object" && response !== null) {
+    const status = (response as Record<string, unknown>)["status"];
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+  }
+  return undefined;
+}
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Returns true only for the Stellar SDK's account-not-found condition from
+ * `server.getAccount()`: a `NotFoundError`, an HTTP 404, or a message stating the
+ * account could not be found. Transport errors, 5xx responses, and rate limits
+ * return false so they propagate as infrastructure failures instead of being
+ * misreported as unfunded accounts.
+ */
+function isStellarAccountNotFoundError(err: unknown): boolean {
+  if (typeof err === "object" && err !== null) {
+    const name = (err as Record<string, unknown>)["name"];
+    if (name === "NotFoundError") return true;
+  }
+  if (getErrorStatus(err) === 404) return true;
+  const message = getErrorMessage(err).toLowerCase();
+  if (message.includes("account not found") || message.includes("could not find account")) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Checks whether a Stellar account can receive USDC: it must exist on-ledger (accounts do
  * not exist until minimally funded with XLM) and hold a trustline for the USDC asset. An
@@ -140,6 +181,10 @@ const MISSING_TRUSTLINE_MESSAGE = "trustline entry is missing for account";
  * account without a USDC trustline causes the balance() simulation to fail with
  * Error(Contract, #13) / "trustline entry is missing for account" rather than returning a
  * zero balance.
+ *
+ * Only the account-not-found condition maps to `exists: false`. Any other
+ * `getAccount` failure (DNS error, RPC 503, rate limit) throws `StellarRpcError`
+ * so callers retry instead of telling users to fund an account that may exist.
  */
 export async function checkStellarRecipientReady(
   recipient: string,
@@ -152,8 +197,16 @@ export async function checkStellarRecipientReady(
   let account;
   try {
     account = await server.getAccount(recipient);
-  } catch {
-    return { exists: false, hasTrustline: false, ready: false };
+  } catch (err) {
+    if (isStellarAccountNotFoundError(err)) {
+      return { exists: false, hasTrustline: false, ready: false };
+    }
+    const status = getErrorStatus(err);
+    throw new StellarRpcError(
+      `Failed to check Stellar recipient ${recipient}: Stellar RPC request failed${status !== undefined ? ` (status ${status})` : ""}: ${getErrorMessage(err)}`,
+      status,
+      err,
+    );
   }
 
   const contract = new Contract(stellar.usdc);
