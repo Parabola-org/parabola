@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runSmokeStep, transientInfrastructureError, formatStepSummary } from "./smoke-step-runner.mjs";
+import { runSmokeStep, transientInfrastructureError, formatStepSummary, stringifySmokeValue } from "./smoke-step-runner.mjs";
 const silent = {warn(){}};
 test("read-only temporary outage retries then succeeds", async () => {
  let n=0; const r=await runSmokeStep("rpc",async()=>{if(++n===1)throw Object.assign(new Error("unavailable"),{status:503});return 1;},{safeToRetry:true,sleep:async()=>{},log:silent});
@@ -64,4 +64,9 @@ test("read-only inspection never changes transfer operation count", async () => 
 });
 test("invalid retry budget is rejected",async()=>{
  await assert.rejects(()=>runSmokeStep("bad",async()=>1,{retries:99}),RangeError);
+});
+
+test("bigint fields in recovery receipts serialize without an exception", () => {
+  const json = stringifySmokeValue({ amount: 1234567n, nested: { fee: 0n } });
+  assert.deepEqual(JSON.parse(json), { amount: "1234567", nested: { fee: "0" } });
 });
