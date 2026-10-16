@@ -86,6 +86,26 @@ describe("decodeCctpMessage", () => {
   it("rejects a non-hex message", () => {
     expect(() => decodeCctpMessage("0xzz")).toThrow(/valid hex/);
   });
+
+  it("rejects a header version other than the wire-supported 1", () => {
+    // Flip only the first 4 bytes of the real testnet message — version 2
+    // would mean a different header layout, so decoding must refuse rather
+    // than produce a confidently wrong burn.
+    const mutated = "0x" + "00000002" + LIVE_TESTNET_BURN_MESSAGE.slice(10);
+    expect(() => decodeCctpMessage(mutated)).toThrow(
+      /header version is 2, expected 1/,
+    );
+  });
+
+  it("rejects a burn-body version other than 1 even on a valid header", () => {
+    // Same trick on the body version slot (byte offset 148, 8 hex chars in).
+    const before = LIVE_TESTNET_BURN_MESSAGE.slice(0, 2 + 148 * 2);
+    const after = LIVE_TESTNET_BURN_MESSAGE.slice(2 + 148 * 2 + 8);
+    const mutated = before + "00000007" + after;
+    expect(() => decodeCctpMessage(mutated)).toThrow(
+      /burn body version is 7, expected 1/,
+    );
+  });
 });
 
 describe("decodeStellarForwardHook", () => {

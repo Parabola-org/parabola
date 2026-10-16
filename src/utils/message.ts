@@ -38,6 +38,13 @@ const BODY_OFFSET = {
 /** Every CCTP V2 message header is this long, and every burn body at least this long. */
 const V2_BURN_MESSAGE_MINIMUM_LENGTH = BODY_OFFSET.hookData;
 
+// The on-wire version fields are 1 on both halves — "V2" names the protocol
+// generation, not the field value. Pinned by the live Iris testnet message in
+// tests/message.test.ts, whose first bytes are 0x00000001 (header) and
+// 0x00000001 (body).
+const EXPECTED_HEADER_VERSION = 1;
+const EXPECTED_BURN_BODY_VERSION = 1;
+
 export interface CctpBurnMessage {
   version: number;
   sourceDomain: number;
@@ -90,6 +97,23 @@ export function decodeCctpMessage(message: string): CctpBurnMessage {
   if (raw.length < V2_BURN_MESSAGE_MINIMUM_LENGTH) {
     throw new Error(
       `CCTP message is ${raw.length} bytes, shorter than the ${V2_BURN_MESSAGE_MINIMUM_LENGTH}-byte V2 burn message minimum`,
+    );
+  }
+
+  // Validate before decoding a single field at a fixed offset. A future wire
+  // format (V3 header, a non-burn body, a reordered layout) read at these
+  // offsets produces confidently wrong amounts and recipients — this is the
+  // one check that turns that silent misread into a refusal.
+  const headerVersion = raw.readUInt32BE(HEADER_OFFSET.version);
+  if (headerVersion !== EXPECTED_HEADER_VERSION) {
+    throw new Error(
+      `CCTP message header version is ${headerVersion}, expected ${EXPECTED_HEADER_VERSION} — refusing to decode a wire format this SDK does not know`,
+    );
+  }
+  const bodyVersion = raw.readUInt32BE(BODY_OFFSET.version);
+  if (bodyVersion !== EXPECTED_BURN_BODY_VERSION) {
+    throw new Error(
+      `CCTP burn body version is ${bodyVersion}, expected ${EXPECTED_BURN_BODY_VERSION} — the body layout differs from what the mint path expects`,
     );
   }
 
