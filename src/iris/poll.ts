@@ -15,11 +15,21 @@ export async function fetchFastTransferFeeBps(
   const url = `${irisBaseUrl(useSandbox)}burn/USDC/fees/${sourceDomain}/${destDomain}`;
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`Iris fees request failed: ${res.status} ${res.statusText}`);
+    throw new IrisRequestError(`Iris fees request failed: ${res.status} ${res.statusText}`, res.status);
   }
   const body = (await res.json()) as IrisFeesResponse;
   const fastEntry = body.find((entry) => entry.finalityThreshold <= 1000);
-  return fastEntry?.minimumFee ?? 0;
+  if (!fastEntry) {
+    // An unpriced fast tier is a failure, not a free transfer. Returning 0 here
+    // used to quote zero fee for every fast transfer when Iris changed its
+    // response shape, returned an empty array, or dropped the <=1000 tier —
+    // the burn then went out priced at nothing.
+    throw new IrisRequestError(
+      `Iris fees response for domains ${sourceDomain} -> ${destDomain} contained no entry at or below finality threshold 1000; cannot quote a Fast Transfer fee`,
+      res.status,
+    );
+  }
+  return fastEntry.minimumFee;
 }
 
 /**

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `fetchFastTransferFeeBps` no longer silently prices Fast Transfers at zero: a non-OK Iris fees response now rejects with `IrisRequestError` carrying the HTTP status, and a successful response with no entry at or below finality threshold 1000 (changed shape, empty array, or a dropped fast tier) rejects with an error naming the domain pair instead of resolving to `0`. The normal path, including the exact threshold boundary of 1000, is unchanged.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

@@ -56,25 +56,62 @@ describe("fetchFastTransferFeeBps", () => {
     expect(feeBps).toBe(2);
   });
 
-  it("returns 0 when no entry at or under the fast finality threshold exists", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ finalityThreshold: 2000, minimumFee: 5 }],
-    }) as unknown as typeof fetch;
-
-    const feeBps = await fetchFastTransferFeeBps(26, 27, true);
-
-    expect(feeBps).toBe(0);
-  });
-
-  it("throws when the request fails", async () => {
+  it("rejects with IrisRequestError and the HTTP status when the request fails", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
     }) as unknown as typeof fetch;
 
-    await expect(fetchFastTransferFeeBps(26, 27, true)).rejects.toThrow("Iris fees request failed");
+    const failure = fetchFastTransferFeeBps(26, 27, true);
+
+    await expect(failure).rejects.toThrow(IrisRequestError);
+    await expect(failure).rejects.toThrow("Iris fees request failed: 500");
+    await expect(
+      fetchFastTransferFeeBps(26, 27, true).catch((err) => (err as IrisRequestError).status),
+    ).resolves.toBe(500);
+  });
+
+  it("rejects instead of pricing at zero when no entry is at or under the fast finality threshold", async () => {
+    // Returning 0 here silently quoted a free fast transfer whenever Iris
+    // dropped the <=1000 tier, changed shape, or answered []. An unpriced fee
+    // is a failure the caller must see before anything is burned.
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ finalityThreshold: 2000, minimumFee: 5 }],
+    }) as unknown as typeof fetch;
+
+    const failure = fetchFastTransferFeeBps(26, 27, true);
+
+    await expect(failure).rejects.toThrow(IrisRequestError);
+    // The error names the domain pair so the failing route is diagnosable
+    // without knowing which call site quoted it.
+    await expect(failure).rejects.toThrow(/26 -> 27/);
+  });
+
+  it("rejects when Iris answers with an empty fee list", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    }) as unknown as typeof fetch;
+
+    await expect(fetchFastTransferFeeBps(27, 26, true)).rejects.toThrow(/27 -> 26/);
+  });
+
+  it("still resolves at the exact threshold boundary of 1000", async () => {
+    // 1000 is the fast finality threshold itself; entry.finalityThreshold <= 1000
+    // must keep including it, not push it over to the standard tier.
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ finalityThreshold: 1000, minimumFee: 3 }],
+    }) as unknown as typeof fetch;
+
+    const feeBps = await fetchFastTransferFeeBps(26, 27, true);
+
+    expect(feeBps).toBe(3);
   });
 });
 
