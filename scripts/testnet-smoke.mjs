@@ -5,7 +5,7 @@ import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { Keypair } from "@stellar/stellar-sdk";
 import { transfer, resolveBurn, arcMainnetChain, arcTestnetChain, TransferError } from "../dist/index.js";
-import { runSmokeStep, formatStepSummary } from "./smoke-step-runner.mjs";
+import { runSmokeStep, formatStepSummary, stringifySmokeValue } from "./smoke-step-runner.mjs";
 
 const NETWORK = process.env.NETWORK === "mainnet" ? "mainnet" : "testnet";
 const FROM = process.env.FROM ?? "both";
@@ -58,7 +58,7 @@ if (!ARC_PRIVATE_KEY || !STELLAR_SECRET_KEY) {
       }, { safeToRetry: false, retries: 0 });
       summary.push(result);
       if (result.status === "PASS") {
-        console.log(JSON.stringify(result.value, null, 2));
+        console.log(stringifySmokeValue(result.value));
       } else {
         const error = result.error;
         console.error(`FAIL ${name}:`, error instanceof Error ? error.message : error);
@@ -71,7 +71,7 @@ if (!ARC_PRIVATE_KEY || !STELLAR_SECRET_KEY) {
               () => resolveBurn({ from: params.from, burnTxHash: error.burnTxHash, network: NETWORK }),
               { safeToRetry: true, retries: 2 });
             summary.push(inspection);
-            if (inspection.status === 'PASS') console.log('  burn inspection: ' + JSON.stringify(inspection.value));
+            if (inspection.status === 'PASS') console.log('  burn inspection: ' + stringifySmokeValue(inspection.value));
             else console.error('  burn inspection inconclusive; inspect chain state before recovery.');
           }
           if (error.attestationHash) console.error(`  attestationHash: ${error.attestationHash}`);
