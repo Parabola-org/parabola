@@ -108,24 +108,60 @@ type WriteContractRequest = Omit<
   "chain" | "account"
 >;
 
+/**
+ * Races an abort listener against the receipt wait so cancellation lands promptly.
+ * viem's waitForTransactionReceipt has no AbortSignal support, so an abort during
+ * confirmation keeps the (already-broadcast) receipt wait running in the background
+ * while the caller gets out immediately with a real AbortError.
+ */
+function abortedPromise(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    function onAbort(): void {
+      try {
+        signal.throwIfAborted();
+      } catch (err) {
+        reject(err);
+      }
+    }
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
 async function writeAndWait(
   signer: ArcSigner,
   request: WriteContractRequest,
   network: Network,
   rpcUrl?: string,
+  signal?: AbortSignal,
 ) {
   const account = signer.walletClient.account;
   if (!account) {
     throw new Error("ArcSigner's walletClient must have an account attached");
   }
+  signal?.throwIfAborted();
   const hash = await signer.walletClient.writeContract({
     ...request,
     account,
     chain: chainFor(network),
   } as Parameters<ArcSigner["walletClient"]["writeContract"]>[0]);
   try {
-    await publicClient(network, rpcUrl).waitForTransactionReceipt({ hash });
+    const receiptWait = publicClient(network, rpcUrl).waitForTransactionReceipt({ hash });
+    if (signal) {
+      await Promise.race([receiptWait, abortedPromise(signal)]);
+    } else {
+      await receiptWait;
+    }
   } catch (err) {
+    // Cancellation is not a confirmation failure: an abort stays a plain AbortError
+    // here so callers can keep the pre-burn/post-burn distinction straight. The hash
+    // still exists either way, and runBurn/transfer() attach it where it matters.
+    if (err instanceof Error && err.name === "AbortError") {
+      throw err;
+    }
     // The transaction was already broadcast (hash exists); a failure here means we
     // couldn't confirm it in time, not that it didn't happen. Surface the hash instead
     // of discarding it in a bare error.
@@ -141,6 +177,7 @@ export async function approveUsdcOnArc(
   amountRaw: bigint,
   network: Network,
   rpcUrl?: string,
+  signal?: AbortSignal,
 ): Promise<Hex> {
   const arc = arcConfig(network);
   return writeAndWait(
@@ -153,6 +190,7 @@ export async function approveUsdcOnArc(
     },
     network,
     rpcUrl,
+    signal,
   );
 }
 
@@ -167,6 +205,8 @@ export async function burnUsdcOnArc(params: {
   network: Network;
   /** Overrides the Arc RPC endpoint. Falls back to the network's public default. */
   rpcUrl?: string;
+  /** Optional AbortSignal for external cancellation. */
+  signal?: AbortSignal;
 }): Promise<Hex> {
   const arc = arcConfig(params.network);
   return writeAndWait(
@@ -187,6 +227,7 @@ export async function burnUsdcOnArc(params: {
     },
     params.network,
     params.rpcUrl,
+    params.signal,
   );
 }
 
@@ -206,6 +247,8 @@ export async function burnUsdcOnArcWithStellarForward(params: {
   network: Network;
   /** Overrides the Arc RPC endpoint. Falls back to the network's public default. */
   rpcUrl?: string;
+  /** Optional AbortSignal for external cancellation. */
+  signal?: AbortSignal;
 }): Promise<Hex> {
   const arc = arcConfig(params.network);
   return writeAndWait(
@@ -227,6 +270,7 @@ export async function burnUsdcOnArcWithStellarForward(params: {
     },
     params.network,
     params.rpcUrl,
+    params.signal,
   );
 }
 
@@ -238,6 +282,8 @@ export async function receiveMessageOnArc(params: {
   network: Network;
   /** Overrides the Arc RPC endpoint. Falls back to the network's public default. */
   rpcUrl?: string;
+  /** Optional AbortSignal for external cancellation. */
+  signal?: AbortSignal;
 }): Promise<Hex> {
   const arc = arcConfig(params.network);
   return writeAndWait(
@@ -250,5 +296,6 @@ export async function receiveMessageOnArc(params: {
     },
     params.network,
     params.rpcUrl,
+    params.signal,
   );
 }
