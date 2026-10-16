@@ -68,10 +68,44 @@ async function invokeContract(
   return pollTransactionStatus(server, sendResult.hash);
 }
 
+/**
+ * Consecutive transient `getTransaction` failures tolerated while polling for
+ * confirmation, and the backoff between attempts. This mirrors the tolerance
+ * policy `src/iris/poll.ts` applies to Iris: one blip is normal against a
+ * public endpoint, sustained failure is surfaced — here as
+ * SubmissionTimeoutError, which carries the hash — instead of being absorbed
+ * into a bare error that loses the handle on an already-broadcast transaction.
+ */
+const STELLAR_CONFIRMATION_MAX_CONSECUTIVE_RPC_FAILURES = 5;
+const STELLAR_CONFIRMATION_RETRY_DELAY_MS = 1000;
+
 async function pollTransactionStatus(server: rpc.Server, hash: string): Promise<string> {
   const deadline = Date.now() + STELLAR_CONFIRMATION_TIMEOUT_MS;
+  // A transient RPC failure (connection reset, 5xx) used to reject the whole loop
+  // with a bare error carrying no hash, even though the tx was already broadcast
+  // and the hash is the caller's only handle on it. Blips are normal against a
+  // public RPC, so a short consecutive-failure tolerance mirrors the Iris poll
+  // policy; sustained failure still lands on the SubmissionTimeoutError below,
+  // which carries the hash.
+  let consecutiveRpcFailures = 0;
   while (Date.now() < deadline) {
-    const result = await server.getTransaction(hash);
+    let result: rpc.Api.GetTransactionResponse;
+    try {
+      result = await server.getTransaction(hash);
+      consecutiveRpcFailures = 0;
+    } catch (err) {
+      consecutiveRpcFailures += 1;
+      if (consecutiveRpcFailures >= STELLAR_CONFIRMATION_MAX_CONSECUTIVE_RPC_FAILURES) {
+        // Deadline or not, the RPC is persistently down: surface the hash now
+        // rather than burning the remaining window on calls that cannot succeed.
+        throw new SubmissionTimeoutError(
+          `Stellar RPC failed ${consecutiveRpcFailures} consecutive times polling transaction ${hash}: ${err instanceof Error ? err.message : String(err)}`,
+          hash,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, STELLAR_CONFIRMATION_RETRY_DELAY_MS));
+      continue;
+    }
     if (result.status === "SUCCESS") return hash;
     if (result.status === "FAILED") {
       throw new Error(`Stellar transaction ${hash} failed`);

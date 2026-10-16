@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Confirmation polling for a broadcast Stellar transaction now tolerates transient RPC failures with a bounded consecutive-failure limit and a short backoff, mirroring the Iris poll policy, instead of rejecting with a bare error that discarded the hash. When the RPC never recovers — or the confirmation window simply expires — the failure surfaces as `SubmissionTimeoutError` carrying the hash, so a caller can still act on an already-broadcast transaction. A `FAILED` status keeps throwing immediately without entering the retry loop.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

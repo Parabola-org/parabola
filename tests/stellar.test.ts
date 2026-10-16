@@ -7,6 +7,7 @@ import {
   checkStellarRecipientReady,
 } from "../src/chains/stellar.js";
 import { STELLAR_TESTNET } from "../src/constants.js";
+import { SubmissionTimeoutError } from "../src/errors.js";
 import { stellarAddressToBytes32 } from "../src/utils/encoding.js";
 
 function contractIdOf(contract: Contract): string {
@@ -240,4 +241,105 @@ describe("mintAndForwardOnStellar (CctpForwarder.mint_and_forward)", () => {
     expect(contractIdOf(callSpy.mock.instances[0] as unknown as Contract)).toBe(STELLAR_TESTNET.cctpForwarder);
     expect(callSpy.mock.calls[0]?.[0]).toBe("mint_and_forward");
   });
+});
+
+describe("confirmation polling under transient RPC errors", () => {
+  // All three cases below exercise pollTransactionStatus through the public
+  // burnUsdcOnStellar entry point: sendTransaction succeeds (broadcast done),
+  // then getTransaction misbehaves. The contract under test is that a hash that
+  // already exists on the wire never gets discarded in a bare error.
+  it("rides out N-1 transient getTransaction failures and resolves once the RPC recovers", async () => {
+    vi.useFakeTimers();
+    try {
+      const signerKeypair = mockHappyPathRpc();
+      // The shared limit is 5 consecutive failures; 4 throws then SUCCESS must
+      // resolve, proving the tolerance is not off by one.
+      const getTx = vi
+        .spyOn(rpc.Server.prototype, "getTransaction")
+        .mockRejectedValueOnce(new Error("connect ECONNRESET"))
+        .mockRejectedValueOnce(new Error("503 Service Unavailable"))
+        .mockRejectedValueOnce(new Error("socket hang up"))
+        .mockRejectedValueOnce(new Error("connect ECONNRESET"))
+        .mockResolvedValueOnce({ status: "SUCCESS" } as any);
+
+      const recipient = Keypair.random().publicKey();
+      const burnPromise = burnUsdcOnStellar({
+        amountRaw: 10_000_000n,
+        destinationDomain: 26,
+        mintRecipientBytes32: stellarAddressToBytes32(recipient),
+        maxFeeRaw: 1000n,
+        minFinalityThreshold: 2000,
+        signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        network: "testnet",
+      });
+      const done = expect(burnPromise).resolves.toBe(FAKE_HASH);
+      await vi.runAllTimersAsync();
+      await done;
+
+      expect(getTx).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 10_000);
+
+  it("rejects with SubmissionTimeoutError carrying the hash when the RPC never recovers", async () => {
+    vi.useFakeTimers();
+    try {
+      const signerKeypair = mockHappyPathRpc();
+      vi.spyOn(rpc.Server.prototype, "getTransaction").mockRejectedValue(
+        new Error("connect ECONNREFUSED"),
+      );
+
+      const recipient = Keypair.random().publicKey();
+      const burnPromise = burnUsdcOnStellar({
+        amountRaw: 10_000_000n,
+        destinationDomain: 26,
+        mintRecipientBytes32: stellarAddressToBytes32(recipient),
+        maxFeeRaw: 1000n,
+        minFinalityThreshold: 2000,
+        signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        network: "testnet",
+      });
+      const assertion = expect(burnPromise).rejects.toBeInstanceOf(SubmissionTimeoutError);
+      await vi.runAllTimersAsync();
+      await assertion;
+
+      // The whole point: the caller keeps the only handle on an already-broadcast
+      // transaction, and the persistent failure stops at the shared limit (5
+      // attempts) instead of burning the full confirmation window.
+      const err = (await burnPromise.catch((e: unknown) => e)) as SubmissionTimeoutError;
+      expect(err.hash).toBe(FAKE_HASH);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 10_000);
+
+  it("keeps throwing immediately on FAILED without entering the retry loop", async () => {
+    vi.useFakeTimers();
+    try {
+      const signerKeypair = mockHappyPathRpc();
+      const getTx = vi
+        .spyOn(rpc.Server.prototype, "getTransaction")
+        .mockResolvedValue({ status: "FAILED" } as any);
+
+      const recipient = Keypair.random().publicKey();
+      const burnPromise = burnUsdcOnStellar({
+        amountRaw: 10_000_000n,
+        destinationDomain: 26,
+        mintRecipientBytes32: stellarAddressToBytes32(recipient),
+        maxFeeRaw: 1000n,
+        minFinalityThreshold: 2000,
+        signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        network: "testnet",
+      });
+      const assertion = expect(burnPromise).rejects.toThrow(/failed/);
+      await vi.runAllTimersAsync();
+      await assertion;
+
+      // A terminal status is not transient: one read, no retries, no backoff.
+      expect(getTx).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 10_000);
 });
