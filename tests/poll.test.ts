@@ -179,6 +179,65 @@ describe("pollForAttestation", () => {
 
     expect(message.attestation).toBe("0xabc");
   });
+
+  it("passes the caller's AbortSignal through to the Iris fetch", async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    global.fetch = vi
+      .fn()
+      .mockImplementation(async (_url: string, init?: { signal?: AbortSignal }) => {
+        seen.push(init?.signal);
+        return okResponse(PENDING_BODY);
+      }) as unknown as typeof fetch;
+
+    const controller = new AbortController();
+    await pollForAttestation({ ...POLL, pollInterval: 1, pollTimeout: 30, signal: controller.signal }).catch(
+      () => {},
+    );
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toBe(controller.signal);
+  });
+
+  it("rejects promptly with an AbortError when the signal aborts mid-poll", async () => {
+    // The fetch never resolves on its own and the sleeps are huge: without signal
+    // support this would take the full 5-minute pollTimeout. The mock rejects on
+    // abort, the way a real fetch honoring AbortSignal does.
+    global.fetch = vi
+      .fn()
+      .mockImplementation(
+        (_url: string, init?: { signal?: AbortSignal }) =>
+          new Promise((_, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("The operation was aborted.", "AbortError")),
+              { once: true },
+            );
+          }),
+      ) as unknown as typeof fetch;
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+
+    const start = Date.now();
+    const err = await pollForAttestation({
+      ...POLL,
+      pollInterval: 10_000,
+      pollTimeout: 300_000,
+      signal: controller.signal,
+    }).catch((e) => e);
+
+    expect(err).toMatchObject({ name: "AbortError" });
+    expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
+  it("rejects with an AbortError when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(pollForAttestation({ ...POLL, signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
 });
 
 describe("getAttestation", () => {

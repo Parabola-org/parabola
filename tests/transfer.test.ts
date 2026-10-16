@@ -721,7 +721,14 @@ describe("transfer destination precision pre-flight check", () => {
     });
 
     expect(result.status).toBe("success");
-    expect(approveUsdcOnStellar).toHaveBeenCalledWith(11_230_000n, stellarSigner, "mainnet", undefined, undefined);
+    expect(approveUsdcOnStellar).toHaveBeenCalledWith(
+      11_230_000n,
+      stellarSigner,
+      "mainnet",
+      undefined,
+      undefined,
+      undefined,
+    );
     expect(burnUsdcOnStellar).toHaveBeenCalledTimes(1);
   });
 
@@ -737,7 +744,7 @@ describe("transfer destination precision pre-flight check", () => {
     });
 
     expect(result.status).toBe("success");
-    expect(approveUsdcOnArc).toHaveBeenCalledWith(arcSigner, 1_123_456n, "mainnet", undefined);
+    expect(approveUsdcOnArc).toHaveBeenCalledWith(arcSigner, 1_123_456n, "mainnet", undefined, undefined);
     expect(burnUsdcOnArcWithStellarForward).toHaveBeenCalledTimes(1);
   });
 });
