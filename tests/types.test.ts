@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type {
   ArcSigner,
   CompleteMintParams,
+  EstimateFeeParams,
   StellarSigner,
   TransferParams,
 } from "../src/types.js";
@@ -161,5 +162,20 @@ describe("completeMint direction and signer", () => {
     const wrong: CompleteMintParams = { from: "stellar", to: "arc", burnTxHash: "0xburn", signer: keypairSigner };
 
     expect(wrong.to).toBe("arc");
+  });
+});
+
+describe("estimateFee params shape", () => {
+  it("accepts optional maxFee and maxWait knobs", () => {
+    const params = {
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxFee: "0.1",
+      maxWait: 15,
+    } satisfies EstimateFeeParams;
+
+    expect(params.speed).toBe("fast");
   });
 });

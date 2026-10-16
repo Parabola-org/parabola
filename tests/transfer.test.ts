@@ -665,4 +665,20 @@ describe("transfer fast/standard fee handling", () => {
     expect(result.transferMode).toBe("fast");
     expect(result.fee).toBe("0.1");
   });
+
+  it("falls back to standard when fast duration exceeds maxWait without querying Iris", async () => {
+    const result = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "1000",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "fast",
+      signer: arcSigner,
+      options: { maxWait: 10, destinationSigner: stellarSigner },
+    });
+
+    expect(result.transferMode).toBe("standard");
+    expect(result.fee).toBe("0");
+    expect(fetchFastTransferFeeBps).not.toHaveBeenCalled();
+  });
 });
