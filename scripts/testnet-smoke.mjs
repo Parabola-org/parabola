@@ -67,8 +67,17 @@ if (!ARC_PRIVATE_KEY || !STELLAR_SECRET_KEY) {
       }
       const result = await runSmokeStep(name, async () => {
         const value = await transfer(params);
-        if (value.status !== "success" || !value.mintTxHash)
-          throw new Error(`Transfer incomplete: ${value.status}; mintTxHash=${value.mintTxHash ?? "missing"}`);
+        if (value.status !== "success" || !value.mintTxHash) {
+          // A pending result may include a successful burn: retain the hash for recovery.
+          if (value.burnTxHash) {
+            throw new TransferError(
+              `Transfer incomplete: ${value.status}; mintTxHash=${value.mintTxHash ?? "missing"}`,
+              value.burnTxHash,
+              value.attestationHash || undefined,
+            );
+          }
+          throw new Error(`Transfer incomplete without burn hash: ${value.status}`);
+        }
         return value;
       }, { safeToRetry: false, retries: 0 });
       summary.push(result);
