@@ -51,3 +51,45 @@ describe("fromRawAmount", () => {
     }
   });
 });
+
+import { convertPrecision } from "../src/utils/encoding.js";
+
+describe("convertPrecision", () => {
+
+  it("up-scales 6-decimal Arc amounts to 7-decimal Stellar exactly", () => {
+    expect(convertPrecision(1_234_567n, 6, 7)).toBe(12_345_670n);
+  });
+
+  it("down-scales 7-decimal Stellar amounts to Arc's 6, truncating the extra digit", () => {
+    // Stellar stroops 1_234_567 → Arc subunits 123_456 — the 7th digit is dropped,
+    // matching the documented "truncates any excess precision" behavior.
+    expect(convertPrecision(1_234_567n, 7, 6)).toBe(123_456n);
+  });
+
+  it("is the identity when the precisions match", () => {
+    expect(convertPrecision(999_999n, 6, 6)).toBe(999_999n);
+    expect(convertPrecision(999_999n, 7, 7)).toBe(999_999n);
+  });
+
+  it("round-trips an amount that survives the 7→6 truncation", () => {
+    // 1.5 USDC on Stellar (1_500_000 stroops) → 1.5 on Arc (1_500_000→150_000),
+    // and back lands exactly — the truncated digit was already zero.
+    const stellar = 1_500_000n;
+    const arc = convertPrecision(stellar, 7, 6);
+    expect(arc).toBe(150_000n);
+    expect(convertPrecision(arc, 6, 7)).toBe(stellar);
+  });
+
+  it("round-trip with nonzero truncated digits loses the precision honestly", () => {
+    const stellar = 1_234_567n;
+    const down = convertPrecision(stellar, 7, 6); // 123_456 — last digit gone
+    const back = convertPrecision(down, 6, 7);    // 1_234_560 — not the original
+    expect(back).toBe(1_234_560n);
+    expect(back).not.toBe(stellar);
+  });
+
+  it("handles zero and max-precision boundaries", () => {
+    expect(convertPrecision(0n, 6, 7)).toBe(0n);
+    expect(convertPrecision(9_999_999n, 7, 6)).toBe(999_999n);
+  });
+});
