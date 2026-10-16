@@ -4,7 +4,7 @@
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { Keypair } from "@stellar/stellar-sdk";
-import { transfer, resolveBurn, arcMainnetChain, arcTestnetChain, TransferError } from "../dist/index.js";
+import { transfer, resolveBurn, checkStellarRecipientReady, arcMainnetChain, arcTestnetChain, TransferError } from "../dist/index.js";
 import { runSmokeStep, formatStepSummary, stringifySmokeValue } from "./smoke-step-runner.mjs";
 
 const NETWORK = process.env.NETWORK === "mainnet" ? "mainnet" : "testnet";
@@ -50,6 +50,21 @@ if (!ARC_PRIVATE_KEY || !STELLAR_SECRET_KEY) {
       // transfer() performs approval, burn, attestation polling and mint as one SDK
       // operation. It must be treated as non-idempotent: retrying the entire
       // operation on a transient error could burn more USDC.
+      // Preflight is read-only; do not initiate a burn if the destination is not ready.
+      if (params.to === "stellar") {
+        const preflight = await runSmokeStep(name + ": fund/check", async () => {
+          const state = await checkStellarRecipientReady(params.recipient, NETWORK, STELLAR_RPC_URL);
+          if (!state.exists || !state.hasTrustline) {
+            throw new Error("Stellar recipient needs funding and a USDC trustline");
+          }
+          return state;
+        }, { safeToRetry: false, retries: 0 });
+        summary.push(preflight);
+        if (preflight.status === "FAIL") {
+          console.error("FAIL preflight:", preflight.error instanceof Error ? preflight.error.message : preflight.error);
+          continue;
+        }
+      }
       const result = await runSmokeStep(name, async () => {
         const value = await transfer(params);
         if (value.status !== "success" || !value.mintTxHash)
