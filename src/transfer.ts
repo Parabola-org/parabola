@@ -21,7 +21,8 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_POLL_TIMEOUT_MS,
 } from "./constants.js";
-import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
+import { pollForAttestation, getAttestation } from "./iris/poll.js";
+import { domainFor, resolveTransferMode } from "./fee.js";
 import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
 import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
@@ -34,12 +35,6 @@ import {
   checkStellarRecipientReady,
 } from "./chains/stellar.js";
 
-const FAST_ESTIMATED_DURATION_SECONDS = 15;
-
-function domainFor(chain: "arc" | "stellar"): number {
-  return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;
-}
-
 export async function transfer(params: TransferParams): Promise<TransferResult> {
   const start = Date.now();
   const options = params.options ?? {};
@@ -50,25 +45,15 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   const pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = options.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
 
-  let transferMode: TransferMode = params.speed;
-  let feeRaw = 0n;
-
-  if (transferMode === "fast") {
-    if (options.maxWait !== undefined && FAST_ESTIMATED_DURATION_SECONDS > options.maxWait) {
-      transferMode = "standard";
-    } else {
-      const feeBps = await fetchFastTransferFeeBps(domainFor(params.from), domainFor(params.to), useSandbox);
-      const amountRawSource = toRawAmount(params.amount, params.from);
-      feeRaw = (amountRawSource * BigInt(feeBps)) / 10_000n;
-      if (options.maxFee !== undefined) {
-        const maxFeeRaw = parseUsdcAmount(options.maxFee, decimalsForChain(params.from));
-        if (feeRaw > maxFeeRaw) {
-          transferMode = "standard";
-          feeRaw = 0n;
-        }
-      }
-    }
-  }
+  const { transferMode, feeRaw } = await resolveTransferMode({
+    from: params.from,
+    to: params.to,
+    amount: params.amount,
+    speed: params.speed,
+    network,
+    maxFee: options.maxFee,
+    maxWait: options.maxWait,
+  });
 
   const minFinalityThreshold =
     transferMode === "fast" ? FINALITY_THRESHOLD_FAST : FINALITY_THRESHOLD_STANDARD;

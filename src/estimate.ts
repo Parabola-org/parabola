@@ -1,39 +1,33 @@
-import type { EstimateFeeParams, FeeEstimate, ChainId } from "./types.js";
-import { ARC_DOMAIN, STELLAR_DOMAIN } from "./constants.js";
-import { fetchFastTransferFeeBps } from "./iris/poll.js";
-import { toRawAmount, fromRawAmount } from "./utils/amount.js";
-
-function domainFor(chain: ChainId): number {
-  return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;
-}
-
-// Arc's chain finality is sub-second, but Stellar's ~5s ledger close time and
-// Iris attestation overhead dominate standard-transfer duration.
-const STANDARD_DURATION_SECONDS = 20;
-const FAST_DURATION_SECONDS = 15;
+import type { EstimateFeeParams, FeeEstimate } from "./types.js";
+import { fromRawAmount } from "./utils/amount.js";
+import {
+  resolveTransferMode,
+  FAST_DURATION_SECONDS,
+  STANDARD_DURATION_SECONDS,
+} from "./fee.js";
 
 export async function estimateFee(params: EstimateFeeParams): Promise<FeeEstimate> {
-  if (params.speed === "standard") {
+  const { transferMode, feeRaw } = await resolveTransferMode({
+    from: params.from,
+    to: params.to,
+    amount: params.amount,
+    speed: params.speed,
+    network: params.network ?? "mainnet",
+    maxFee: params.maxFee,
+    maxWait: params.maxWait,
+  });
+
+  if (transferMode === "standard") {
     return {
       protocolFee: "0",
       estimatedDurationSeconds: STANDARD_DURATION_SECONDS,
-      transferMode: "standard",
+      transferMode,
     };
   }
-
-  const network = params.network ?? "mainnet";
-  const feeBps = await fetchFastTransferFeeBps(
-    domainFor(params.from),
-    domainFor(params.to),
-    network === "testnet",
-  );
-
-  const amountRaw = toRawAmount(params.amount, params.from);
-  const feeRaw = (amountRaw * BigInt(feeBps)) / 10_000n;
 
   return {
     protocolFee: fromRawAmount(feeRaw, params.from),
     estimatedDurationSeconds: FAST_DURATION_SECONDS,
-    transferMode: "fast",
+    transferMode,
   };
 }
