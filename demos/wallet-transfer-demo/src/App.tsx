@@ -31,7 +31,7 @@ export function App() {
     status,
     result,
     error,
-    recoverableBurnTxHash,
+    recoverable,
     submissionUncertain,
     submit,
     finishPending,
@@ -115,20 +115,28 @@ export function App() {
     };
   }
 
-  // The mint runs on form.to, so that is the chain whose signer must be supplied.
-  function mintParams(burnTxHash: string): CompleteMintParams | null {
-    if (form.to === "arc") {
+  // The mint runs on the burn's destination chain, so that is the chain whose signer must
+  // be supplied. For pending results the direction is form's; for a recoverable failure it
+  // is the captured direction from burn time — a form flip between the two must not mint
+  // the wrong direction.
+  function mintParams(
+    burnTxHash: string,
+    direction?: { from: "arc" | "stellar"; to: "arc" | "stellar"; network: Network },
+  ): CompleteMintParams | null {
+    const dir = direction ?? { from: form.from, to: form.to, network };
+    if (dir.to === "arc") {
       const signer = arcWallet.signer;
-      return signer ? { from: "stellar", to: "arc", burnTxHash, signer, network } : null;
+      return signer ? { from: "stellar", to: "arc", burnTxHash, signer, network: dir.network } : null;
     }
     const signer = stellarWallet.signer;
-    return signer ? { from: "arc", to: "stellar", burnTxHash, signer, network } : null;
+    return signer ? { from: "arc", to: "stellar", burnTxHash, signer, network: dir.network } : null;
   }
 
-  // The mint runs on form.to, so a connected wallet on that chain is what makes the
-  // completion step possible.
+  // The mint runs on the burn's destination chain — for a recoverable failure that is the
+  // captured direction, not whatever the form happens to show now.
   function destinationWalletConnected(): boolean {
-    return form.to === "arc" ? arcWallet.signer !== null : stellarWallet.signer !== null;
+    const to = recoverable?.to ?? form.to;
+    return to === "arc" ? arcWallet.signer !== null : stellarWallet.signer !== null;
   }
 
   async function handleSubmit() {
@@ -153,8 +161,8 @@ export function App() {
   }
 
   async function handleRecoverMint() {
-    if (!recoverableBurnTxHash) return;
-    const params = mintParams(recoverableBurnTxHash);
+    if (!recoverable) return;
+    const params = mintParams(recoverable.burnTxHash, recoverable);
     if (!params) return;
 
     await finishPending(params);
@@ -237,7 +245,7 @@ export function App() {
       {error && (
         <ErrorBanner
           message={error}
-          recoverableBurnTxHash={recoverableBurnTxHash}
+          recoverable={recoverable}
           submissionUncertain={submissionUncertain}
           destinationWalletConnected={destinationWalletConnected()}
           onRecover={handleRecoverMint}

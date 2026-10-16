@@ -1,6 +1,8 @@
+import { useState } from "react";
+
 interface Props {
   message: string;
-  recoverableBurnTxHash: string | null;
+  recoverable: { burnTxHash: string; from: "arc" | "stellar"; to: "arc" | "stellar" } | null;
   submissionUncertain: boolean;
   destinationWalletConnected: boolean;
   onRecover: () => void;
@@ -19,23 +21,47 @@ interface Props {
  */
 export function ErrorBanner({
   message,
-  recoverableBurnTxHash,
+  recoverable,
   submissionUncertain,
   destinationWalletConnected,
   onRecover,
   recovering,
   onDismiss,
 }: Props) {
+  const [copied, setCopied] = useState(false);
+  const burnTxHash = recoverable?.burnTxHash ?? null;
+
+  async function copyHash() {
+    if (!burnTxHash) return;
+    try {
+      await navigator.clipboard.writeText(burnTxHash);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard denied — the hash is still on screen
+    }
+  }
+
   return (
     <div className="error-banner" role="alert">
       <p>{message}</p>
-      {recoverableBurnTxHash ? (
+      {burnTxHash ? (
         <p>
-          The source-chain burn already succeeded (tx <code>{recoverableBurnTxHash}</code>);
-          the funds haven't minted on the destination chain yet.{" "}
+          The {recoverable!.from}&#8594;{recoverable!.to} burn already succeeded — the funds
+          left the source chain safely, they just haven't minted on the destination yet.{" "}
           {destinationWalletConnected
             ? "Finish it below rather than retrying the transfer from scratch."
             : "Connect the destination wallet, then finish it below rather than retrying the transfer from scratch."}
+          <br />
+          Burn tx: <code>{burnTxHash}</code>{" "}
+          <button
+            type="button"
+            className="link-button"
+            onClick={copyHash}
+            aria-label={copied ? "Burn transaction hash copied" : "Copy burn transaction hash"}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
         </p>
       ) : submissionUncertain ? (
         <p>
@@ -49,9 +75,9 @@ export function ErrorBanner({
         <p>Nothing was submitted on-chain yet, so it's safe to retry.</p>
       )}
       <div className="error-banner-actions">
-        {recoverableBurnTxHash && (
+        {burnTxHash && (
           <button onClick={onRecover} disabled={!destinationWalletConnected || recovering}>
-            {recovering ? "Completing mint..." : "Complete mint"}
+            {recovering ? "Completing mint..." : "Complete transfer"}
           </button>
         )}
         <button className="link-button" onClick={onDismiss}>
