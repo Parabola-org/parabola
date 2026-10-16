@@ -34,7 +34,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/test-smoke-step-runner.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "verify:addresses": "node scripts/verify-contract-addresses.mjs",
