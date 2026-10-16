@@ -83,6 +83,38 @@ describe("decodeCctpMessage", () => {
     expect(() => decodeCctpMessage("0x00000001")).toThrow(/shorter than the 376-byte/);
   });
 
+  it("rejects an unsupported CCTP message version naming expected and received versions", () => {
+    // Replace first 4 bytes (header version) with version 2
+    const badVersionMessage = "0x00000002" + LIVE_TESTNET_BURN_MESSAGE.slice(10);
+    expect(() => decodeCctpMessage(badVersionMessage)).toThrow(
+      "Unsupported CCTP message version: expected 1, got 2",
+    );
+  });
+
+  it("rejects an unsupported CCTP burn body version naming expected and received versions", () => {
+    // Header is 148 bytes = 296 hex chars. With "0x" prefix, body starts at index 298.
+    const beforeBodyVersion = LIVE_TESTNET_BURN_MESSAGE.slice(0, 298);
+    const afterBodyVersion = LIVE_TESTNET_BURN_MESSAGE.slice(298 + 8);
+    const badBodyVersionMessage = beforeBodyVersion + "00000002" + afterBodyVersion;
+    expect(() => decodeCctpMessage(badBodyVersionMessage)).toThrow(
+      "Unsupported CCTP burn body version: expected 1, got 2",
+    );
+  });
+
+  it("rejects version 0 header and body versions", () => {
+    const v0Header = "0x00000000" + LIVE_TESTNET_BURN_MESSAGE.slice(10);
+    expect(() => decodeCctpMessage(v0Header)).toThrow(
+      "Unsupported CCTP message version: expected 1, got 0",
+    );
+
+    const beforeBody = LIVE_TESTNET_BURN_MESSAGE.slice(0, 298);
+    const afterBody = LIVE_TESTNET_BURN_MESSAGE.slice(298 + 8);
+    const v0Body = beforeBody + "00000000" + afterBody;
+    expect(() => decodeCctpMessage(v0Body)).toThrow(
+      "Unsupported CCTP burn body version: expected 1, got 0",
+    );
+  });
+
   it("rejects a non-hex message", () => {
     expect(() => decodeCctpMessage("0xzz")).toThrow(/valid hex/);
   });
