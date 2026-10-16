@@ -53,11 +53,21 @@ type PollOutcome =
  * complete: false. Its bytes are already final, so a caller that only needs to know what
  * the burn will do can read it before Circle has signed.
  */
-async function pollOnce(url: string, transactionHash: string): Promise<PollOutcome> {
+async function pollOnce(
+  url: string,
+  transactionHash: string,
+  signal?: AbortSignal,
+): Promise<PollOutcome> {
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, { signal });
   } catch (err) {
+    // An aborted fetch is cancellation, not an Iris outage: rethrow it as-is so
+    // the poll loop can surface an AbortError instead of logging a spurious
+    // IrisRequestError or burning the consecutive-failure budget.
+    if (err instanceof Error && (err.name === "AbortError" || signal?.aborted)) {
+      throw err;
+    }
     const reason = err instanceof Error ? err.message : String(err);
     return {
       kind: "failure",
@@ -110,9 +120,11 @@ async function retryTransientFailures(
   attempt: () => Promise<PollOutcome>,
   delayMs: number = DEFAULT_POLL_INTERVAL_MS,
   maxFailures: number = IRIS_MAX_CONSECUTIVE_FAILURES,
+  signal?: AbortSignal,
 ): Promise<PollOutcome> {
   let consecutiveFailures = 0;
   for (;;) {
+    signal?.throwIfAborted();
     const outcome = await attempt();
     if (outcome.kind !== "failure") {
       return outcome;
@@ -121,7 +133,7 @@ async function retryTransientFailures(
     if (consecutiveFailures >= maxFailures) {
       throw outcome.error;
     }
-    await sleep(delayMs);
+    await sleep(delayMs, signal);
   }
 }
 
@@ -143,14 +155,18 @@ export async function getAttestation(params: {
   transactionHash: string;
   useSandbox: boolean;
   pollInterval?: number;
+  signal?: AbortSignal;
 }): Promise<IrisMessage> {
   const outcome = await retryTransientFailures(
     () =>
       pollOnce(
         attestationUrl(params.sourceDomain, params.transactionHash, params.useSandbox),
         params.transactionHash,
+        params.signal,
       ),
     params.pollInterval ?? DEFAULT_POLL_INTERVAL_MS,
+    IRIS_MAX_CONSECUTIVE_FAILURES,
+    params.signal,
   );
 
   if (outcome.kind === "message") {
@@ -180,16 +196,19 @@ export async function pollForAttestation(params: {
   useSandbox: boolean;
   pollInterval?: number;
   pollTimeout?: number;
+  signal?: AbortSignal;
 }): Promise<IrisMessage> {
   const pollInterval = params.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = params.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
   const url = attestationUrl(params.sourceDomain, params.transactionHash, params.useSandbox);
+  const signal = params.signal;
 
   const deadline = Date.now() + pollTimeout;
   let consecutiveFailures = 0;
 
   while (Date.now() < deadline) {
-    const outcome = await pollOnce(url, params.transactionHash);
+    signal?.throwIfAborted();
+    const outcome = await pollOnce(url, params.transactionHash, signal);
 
     if (outcome.kind === "message" && outcome.complete) {
       return outcome.message;
@@ -204,7 +223,7 @@ export async function pollForAttestation(params: {
       consecutiveFailures = 0;
     }
 
-    await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())), signal);
   }
 
   throw new AttestationNotReadyError(
@@ -213,6 +232,33 @@ export async function pollForAttestation(params: {
   );
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Sleeps for `ms` milliseconds, rejecting with an AbortError as soon as `signal`
+ * aborts instead of sleeping out the whole delay. This is what makes cancellation
+ * land promptly (well before pollTimeout) rather than on the next loop iteration.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      try {
+        signal.throwIfAborted();
+      } catch (err) {
+        reject(err);
+      }
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort(): void {
+      clearTimeout(timer);
+      try {
+        signal!.throwIfAborted();
+      } catch (err) {
+        reject(err);
+      }
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
