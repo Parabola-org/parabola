@@ -6,6 +6,7 @@ import {
   approveUsdcOnStellar,
   checkStellarRecipientReady,
 } from "../src/chains/stellar.js";
+import { StellarRpcError } from "../src/errors.js";
 import { STELLAR_TESTNET } from "../src/constants.js";
 import { stellarAddressToBytes32 } from "../src/utils/encoding.js";
 
@@ -180,6 +181,55 @@ describe("checkStellarRecipientReady", () => {
     const status = await checkStellarRecipientReady(Keypair.random().publicKey());
 
     expect(status).toEqual({ exists: false, hasTrustline: false, ready: false });
+  });
+
+  it("reports not-existing when getLedgerEntries returns no ledger entry for the account", async () => {
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockResolvedValue({
+      latestLedger: 1,
+      entries: [],
+    } as any);
+
+    const status = await checkStellarRecipientReady(Keypair.random().publicKey());
+
+    expect(status).toEqual({ exists: false, hasTrustline: false, ready: false });
+  });
+
+  it("rejects with StellarRpcError on transport failure instead of reporting not-existing", async () => {
+    vi.spyOn(rpc.Server.prototype, "getAccount").mockRejectedValue(
+      new TypeError("fetch failed"),
+    );
+
+    await expect(
+      checkStellarRecipientReady(Keypair.random().publicKey()),
+    ).rejects.toBeInstanceOf(StellarRpcError);
+  });
+
+  it("rejects with StellarRpcError carrying HTTP status on a 503 RPC outage", async () => {
+    const outage = Object.assign(new Error("Service Unavailable"), {
+      response: { status: 503 },
+    });
+    vi.spyOn(rpc.Server.prototype, "getAccount").mockRejectedValue(outage);
+
+    const promise = checkStellarRecipientReady(Keypair.random().publicKey());
+
+    await expect(promise).rejects.toBeInstanceOf(StellarRpcError);
+    await expect(promise).rejects.toMatchObject({
+      name: "StellarRpcError",
+      status: 503,
+      cause: outage,
+    });
+  });
+
+  it("rejects with StellarRpcError when getLedgerEntries fails with a 5xx or rate limit", async () => {
+    const rateLimit = Object.assign(new Error("Too Many Requests"), { status: 429 });
+    vi.spyOn(rpc.Server.prototype, "getLedgerEntries").mockRejectedValue(rateLimit);
+
+    await expect(
+      checkStellarRecipientReady(Keypair.random().publicKey()),
+    ).rejects.toMatchObject({
+      name: "StellarRpcError",
+      status: 429,
+    });
   });
 
   it("reports missing-trustline when the account exists but has never held USDC", async () => {

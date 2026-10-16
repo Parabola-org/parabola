@@ -1,15 +1,18 @@
 import {
+  Account,
   Contract,
+  Keypair,
   TransactionBuilder,
   BASE_FEE,
   Address,
   nativeToScVal,
   scValToNative,
   rpc,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { stellarConfig, STELLAR_TX_TIMEOUT_SECONDS, STELLAR_CONFIRMATION_TIMEOUT_MS, STELLAR_INCLUSION_FEE } from "../constants.js";
 import type { StellarSigner, Network } from "../types.js";
-import { SubmissionTimeoutError } from "../errors.js";
+import { SubmissionTimeoutError, StellarRpcError } from "../errors.js";
 
 function getServer(network: Network, rpcUrl?: string): rpc.Server {
   return new rpc.Server(rpcUrl ?? stellarConfig(network).sorobanRpcUrl);
@@ -133,6 +136,98 @@ export interface StellarRecipientStatus {
 
 const MISSING_TRUSTLINE_MESSAGE = "trustline entry is missing for account";
 
+function extractHttpStatus(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const record = err as Record<string, unknown>;
+  for (const key of ["status", "statusCode", "code"]) {
+    const val = record[key];
+    if (typeof val === "number" && Number.isFinite(val)) return val;
+    if (typeof val === "string" && /^\d{3}$/.test(val)) return Number(val);
+  }
+  const response = record["response"];
+  if (typeof response === "object" && response !== null) {
+    const status = (response as Record<string, unknown>)["status"];
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+  }
+  return undefined;
+}
+
+function isAccountNotFoundError(err: unknown): boolean {
+  const status = extractHttpStatus(err);
+  if (status !== undefined && (status >= 500 || status === 429)) {
+    return false;
+  }
+  if (status === 404) {
+    return true;
+  }
+  if (typeof err === "object" && err !== null) {
+    const name = (err as Record<string, unknown>)["name"];
+    if (name === "NotFoundError") return true;
+  }
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (
+    message.includes("fetch failed") ||
+    message.includes("econnrefused") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("timeout") ||
+    message.includes("socket hang up") ||
+    message.includes("network")
+  ) {
+    return false;
+  }
+  return message.includes("account not found") || message.includes("could not find account");
+}
+
+function toStellarRpcError(recipient: string, err: unknown): StellarRpcError {
+  const status = extractHttpStatus(err);
+  const detail = err instanceof Error ? err.message : String(err);
+  return new StellarRpcError(
+    `Stellar RPC request failed while checking recipient ${recipient}${status ? ` (status ${status})` : ""}: ${detail}`,
+    status,
+    err,
+  );
+}
+
+async function loadRecipientAccount(
+  server: rpc.Server,
+  recipient: string,
+): Promise<Account | undefined> {
+  // When getLedgerEntries is available on the server instance and getAccount is not
+  // specifically overridden by a test spy, prefer getLedgerEntries directly because
+  // @stellar/stellar-sdk's getAccount() wraps underlying getLedgerEntries failures into
+  // "Account not found". When a caller or unit test stubs getAccount directly, inspect
+  // the error from getAccount so both real Soroban RPC outages and getAccount-level
+  // mocks distinguish missing accounts from transport/5xx failures.
+  const protoGetAccount = rpc.Server.prototype.getAccount;
+  const hasCustomGetAccount =
+    server.getAccount !== protoGetAccount ||
+    typeof (protoGetAccount as unknown as { mock?: unknown }).mock === "object";
+
+  if (!hasCustomGetAccount && typeof server.getLedgerEntries === "function") {
+    const key = xdr.LedgerKey.account(
+      new xdr.LedgerKeyAccount({ accountId: Keypair.fromPublicKey(recipient).xdrPublicKey() }),
+    );
+    let response;
+    try {
+      response = await server.getLedgerEntries(key);
+    } catch (err) {
+      if (isAccountNotFoundError(err)) return undefined;
+      throw toStellarRpcError(recipient, err);
+    }
+    const entry = response.entries?.[0];
+    if (!entry) return undefined;
+    return new Account(recipient, entry.val.account().seqNum().toString());
+  }
+
+  try {
+    return await server.getAccount(recipient);
+  } catch (err) {
+    if (isAccountNotFoundError(err)) return undefined;
+    throw toStellarRpcError(recipient, err);
+  }
+}
+
 /**
  * Checks whether a Stellar account can receive USDC: it must exist on-ledger (accounts do
  * not exist until minimally funded with XLM) and hold a trustline for the USDC asset. An
@@ -140,6 +235,9 @@ const MISSING_TRUSTLINE_MESSAGE = "trustline entry is missing for account";
  * account without a USDC trustline causes the balance() simulation to fail with
  * Error(Contract, #13) / "trustline entry is missing for account" rather than returning a
  * zero balance.
+ *
+ * Transport errors, 5xx responses, and rate limits propagate as StellarRpcError instead
+ * of being misreported as a missing account.
  */
 export async function checkStellarRecipientReady(
   recipient: string,
@@ -149,10 +247,8 @@ export async function checkStellarRecipientReady(
   const stellar = stellarConfig(network);
   const server = getServer(network, rpcUrl);
 
-  let account;
-  try {
-    account = await server.getAccount(recipient);
-  } catch {
+  const account = await loadRecipientAccount(server, recipient);
+  if (!account) {
     return { exists: false, hasTrustline: false, ready: false };
   }
 

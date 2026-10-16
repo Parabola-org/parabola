@@ -84,3 +84,23 @@ export class SubmissionTimeoutError extends Error {
     this.hash = hash;
   }
 }
+
+/**
+ * Thrown when a Stellar Soroban RPC request fails due to an infrastructure error
+ * (transport failure, DNS outage, 5xx status, or 429 rate limit) rather than a normal
+ * on-ledger lookup result. Prevents RPC outages during recipient checks from being
+ * misreported as unfunded accounts.
+ */
+export class StellarRpcError extends Error {
+  /** HTTP status code when the server responded; undefined when no response arrived. */
+  readonly status?: number;
+  /** Underlying error that triggered this failure. */
+  override readonly cause?: unknown;
+
+  constructor(message: string, status?: number, cause?: unknown) {
+    super(message, cause !== undefined ? { cause } : undefined);
+    this.name = "StellarRpcError";
+    this.status = status;
+    this.cause = cause;
+  }
+}
