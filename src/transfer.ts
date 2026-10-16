@@ -49,6 +49,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   const arcRpcUrl = options.arcRpcUrl;
   const pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = options.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
+  const signal = options.signal;
 
   const precheck = resolveFastFallback({
     speed: params.speed,
@@ -81,6 +82,10 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
       ? parseUsdcAmount(options.maxFee, decimalsForChain(params.from))
       : feeRaw;
 
+  // A cancellation that lands before the burn must not submit anything: fail fast
+  // with a plain AbortError, no TransferError, and no recovery bookkeeping.
+  signal?.throwIfAborted();
+
   const burnTxHash = await burn({
     params,
     network,
@@ -89,6 +94,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     amountRaw,
     maxFeeRaw,
     minFinalityThreshold,
+    signal,
   });
 
   // Everything past this point runs after the source-chain burn has already happened.
@@ -103,6 +109,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
       useSandbox,
       pollInterval,
       pollTimeout,
+      signal,
     });
     attestationHash = attestation.attestation ?? undefined;
 
@@ -118,6 +125,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
         network,
         stellarRpcUrl,
         arcRpcUrl,
+        signal,
       });
       status = "success";
     }
@@ -149,9 +157,11 @@ async function burn(args: {
   amountRaw: bigint;
   maxFeeRaw: bigint;
   minFinalityThreshold: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const { params, network, stellarRpcUrl, arcRpcUrl, amountRaw, maxFeeRaw, minFinalityThreshold } =
     args;
+  const signal = args.signal;
 
   if (params.from === "arc") {
     const signer = params.signer;
@@ -164,7 +174,7 @@ async function burn(args: {
     // approved to spend at least amountRaw before depositForBurnWithHook will
     // succeed. Approving the exact amount per call avoids leaving a standing
     // allowance beyond what this transfer needs.
-    await approveUsdcOnArc(signer, amountRaw, network, arcRpcUrl);
+    await approveUsdcOnArc(signer, amountRaw, network, arcRpcUrl, signal);
     return runBurn(() => {
       const hookData = encodeStellarForwardHook(params.recipient);
       const mintRecipientBytes32 = stellarAddressToBytes32(stellarConfig(network).cctpForwarder);
@@ -178,6 +188,7 @@ async function burn(args: {
         signer,
         network,
         rpcUrl: arcRpcUrl,
+        signal,
       });
     });
   }
@@ -193,7 +204,7 @@ async function burn(args: {
       : undefined;
   // Stellar's SEP-41 USDC token requires the same approve-before-transfer_from
   // pattern as ERC20 on Arc.
-  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl, stellarRetry);
+  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl, stellarRetry, signal);
   return runBurn(() =>
     burnUsdcOnStellar({
       amountRaw,
@@ -205,6 +216,7 @@ async function burn(args: {
       network,
       rpcUrl: stellarRpcUrl,
       retry: stellarRetry,
+      signal,
     }),
   );
 }
@@ -259,8 +271,9 @@ async function mint(args: {
   network: Network;
   stellarRpcUrl?: string;
   arcRpcUrl?: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { to, message, attestation, signer, network, stellarRpcUrl, arcRpcUrl } = args;
+  const { to, message, attestation, signer, network, stellarRpcUrl, arcRpcUrl, signal } = args;
 
   if (to === "arc") {
     return receiveMessageOnArc({
@@ -269,6 +282,7 @@ async function mint(args: {
       signer: signer as ArcSigner,
       network,
       rpcUrl: arcRpcUrl,
+      signal,
     });
   }
   return mintAndForwardOnStellar({
@@ -277,6 +291,7 @@ async function mint(args: {
     signer: signer as StellarSigner,
     network,
     rpcUrl: stellarRpcUrl,
+    signal,
   });
 }
 
@@ -336,6 +351,7 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
   const pollTimeout = options.pollTimeout ?? params.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
   const stellarRpcUrl = options.stellarRpcUrl ?? params.stellarRpcUrl;
   const arcRpcUrl = options.arcRpcUrl ?? params.arcRpcUrl;
+  const signal = options.signal;
 
   const attestation = await pollForAttestation({
     sourceDomain: domainFor(params.from),
@@ -343,6 +359,7 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
     useSandbox,
     pollInterval,
     pollTimeout,
+    signal,
   });
 
   if (!attestation.message || !attestation.attestation) {
@@ -370,6 +387,7 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
     network,
     stellarRpcUrl,
     arcRpcUrl,
+    signal,
   });
 
   return { mintTxHash, attestationHash: attestation.attestation };

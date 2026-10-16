@@ -54,6 +54,15 @@ export interface TransferOptionsBase {
    */
   arcRpcUrl?: string;
   /**
+   * Optional AbortSignal for external cancellation. Aborting before the burn submits
+   * throws a plain AbortError with nothing submitted and nothing to recover; aborting
+   * after the burn has been submitted rejects with a TransferError that still carries
+   * the real burnTxHash, so the recovery path is identical to any other post-burn
+   * failure. Honored in every polling/sleep loop (abortable sleep, Iris fetches, and
+   * Stellar RPC polling), so cancellation lands promptly rather than at pollTimeout.
+   */
+  signal?: AbortSignal;
+  /**
    * Maximum attempts for Stellar post-approval allowance polling (`waitForAllowance`, default 6)
    * and transient RPC-lag retries during `deposit_for_burn` (`retryOnTransientRpcLag`, default 3).
    * Must be a positive integer when provided. No effect when the source chain is Arc.
@@ -160,6 +169,11 @@ export interface CompleteMintOptions {
   stellarRpcUrl?: string;
   /** Overrides the Arc RPC URL. No effect on Stellar. */
   arcRpcUrl?: string;
+  /**
+   * Optional AbortSignal for external cancellation. Aborted polls reject with an
+   * AbortError rather than waiting out the poll timeout.
+   */
+  signal?: AbortSignal;
 }
 
 /**
