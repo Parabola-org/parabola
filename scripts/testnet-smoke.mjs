@@ -4,7 +4,7 @@
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { Keypair } from "@stellar/stellar-sdk";
-import { transfer, arcMainnetChain, arcTestnetChain, TransferError } from "../dist/index.js";
+import { transfer, resolveBurn, arcMainnetChain, arcTestnetChain, TransferError } from "../dist/index.js";
 import { runSmokeStep, formatStepSummary } from "./smoke-step-runner.mjs";
 
 const NETWORK = process.env.NETWORK === "mainnet" ? "mainnet" : "testnet";
@@ -64,6 +64,16 @@ if (!ARC_PRIVATE_KEY || !STELLAR_SECRET_KEY) {
         console.error(`FAIL ${name}:`, error instanceof Error ? error.message : error);
         if (error instanceof TransferError) {
           console.error(`  burnTxHash: ${error.burnTxHash}`);
+          // After a confirmed burn, only retry the read-only Iris lookup.
+          // Never automatically replay burn or mint with an ambiguous outcome.
+          if (error.burnTxHash) {
+            const inspection = await runSmokeStep(name + ': inspect burn',
+              () => resolveBurn({ from: params.from, burnTxHash: error.burnTxHash, network: NETWORK }),
+              { safeToRetry: true, retries: 2 });
+            summary.push(inspection);
+            if (inspection.status === 'PASS') console.log('  burn inspection: ' + JSON.stringify(inspection.value));
+            else console.error('  burn inspection inconclusive; inspect chain state before recovery.');
+          }
           if (error.attestationHash) console.error(`  attestationHash: ${error.attestationHash}`);
           console.error("  Recover with completeMint(" + JSON.stringify({
             from: params.from, to: params.to, network: params.network,
