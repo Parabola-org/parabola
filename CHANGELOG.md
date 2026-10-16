@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `getAttestation` (and therefore `resolveBurn`) now tolerates transient Iris failures with the same consecutive-failure limit `pollForAttestation` uses, via a shared helper. A single dropped connection no longer makes the read-only "what did this burn commit to?" path fail while the polling path rides out the identical blip. A 404 or empty response is still `AttestationNotReadyError` immediately, with no retry: 404 is an expected state, not a failure, and this read never waits for indexing.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

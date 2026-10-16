@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchFastTransferFeeBps, pollForAttestation } from "../src/iris/poll.js";
+import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "../src/iris/poll.js";
 import { AttestationNotReadyError, IrisRequestError } from "../src/errors.js";
 
 const COMPLETE_BODY = {
@@ -161,4 +161,98 @@ describe("pollForAttestation", () => {
 
     expect(message.attestation).toBe("0xabc");
   });
+});
+
+describe("getAttestation", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.useRealTimers();
+  });
+
+  const GET = { sourceDomain: 26, transactionHash: "0xburn", useSandbox: true } as const;
+
+  it("returns the message as soon as Iris has indexed it, without waiting for attestation", async () => {
+    // The one-shot read answers with whatever state the burn is in; a caller
+    // that needs Circle's signature checks `status` itself.
+    const calls = scriptFetch([okResponse(COMPLETE_BODY)]);
+
+    const message = await getAttestation(GET);
+
+    expect(message.status).toBe("complete");
+    expect(calls.count).toBe(1);
+  });
+
+  it("rides out an isolated failure and still resolves on a retry", async () => {
+    // A single dropped connection used to fail resolveBurn outright here while
+    // the poll loop tolerated the same blip — the whole point of this fix.
+    const calls = scriptFetch([errorResponse(502), okResponse(COMPLETE_BODY)]);
+
+    const message = await getAttestation(GET);
+
+    expect(message.attestation).toBe("0xabc");
+    expect(calls.count).toBe(2);
+  });
+
+  it("still throws AttestationNotReadyError on a 404 without retrying", async () => {
+    // 404 is Iris saying "not indexed yet" — an expected state, not a failure,
+    // so it must consume exactly one fetch and never enter the retry loop.
+    const calls = scriptFetch([errorResponse(404)]);
+
+    const failure = getAttestation(GET);
+
+    await expect(failure).rejects.toThrow(AttestationNotReadyError);
+    expect(calls.count).toBe(1);
+  });
+
+  it("still throws AttestationNotReadyError on an empty messages list without retrying", async () => {
+    const calls = scriptFetch([okResponse({ messages: [] })]);
+
+    const failure = getAttestation(GET);
+
+    await expect(failure).rejects.toThrow(AttestationNotReadyError);
+    expect(calls.count).toBe(1);
+  });
+
+  it("surfaces a persistent failure as IrisRequestError only after the shared consecutive-failure limit", async () => {
+    vi.useFakeTimers();
+    // Five consecutive failures is the poll loop's tolerance (5th aborts); the
+    // shared helper must apply the same budget, no more and no less.
+    const calls = scriptFetch([
+      errorResponse(500),
+      errorResponse(500),
+      errorResponse(500),
+      errorResponse(500),
+      errorResponse(500),
+    ]);
+
+    const failure = getAttestation(GET);
+    const assertion = expect(failure).rejects.toThrow(IrisRequestError);
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(calls.count).toBe(5);
+  }, 10_000);
+
+  it("counts only consecutive failures, so a success between blips still resolves", async () => {
+    vi.useFakeTimers();
+    // Four failures then a healthy read: a cumulative counter would keep
+    // charging those four toward the abort budget, but consecutive-only
+    // counting must let the fifth call's success through.
+    const calls = scriptFetch([
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+      errorResponse(503),
+      okResponse(COMPLETE_BODY),
+    ]);
+
+    const messagePromise = getAttestation(GET);
+    const done = expect(messagePromise).resolves.toMatchObject({ attestation: "0xabc" });
+    await vi.runAllTimersAsync();
+    await done;
+
+    expect(calls.count).toBe(5);
+  }, 10_000);
 });
