@@ -1,3 +1,5 @@
+import type { ChainId } from "./types.js";
+
 /**
  * Thrown by transfer() for any failure that happens after the source-chain burn has
  * already succeeded: attestation polling (timeout or otherwise), or the destination-chain
@@ -82,5 +84,33 @@ export class SubmissionTimeoutError extends Error {
     super(message);
     this.name = "SubmissionTimeoutError";
     this.hash = hash;
+  }
+}
+
+/**
+ * Thrown by transfer() when an amount specifies more significant fractional decimal
+ * places than the destination chain supports (e.g. 7 decimals for Arc USDC which only
+ * supports 6). Thrown before any approval or burn transaction is broadcast.
+ */
+export class AmountPrecisionError extends Error {
+  readonly amount: string;
+  readonly precision: number;
+  readonly destinationDecimals: number;
+  readonly destinationChain: ChainId;
+
+  constructor(
+    amount: string,
+    precision: number,
+    destinationDecimals: number,
+    destinationChain: ChainId,
+  ) {
+    super(
+      `Amount ${amount} has ${precision} significant decimal places, but ${destinationChain} USDC supports only ${destinationDecimals}`,
+    );
+    this.name = "AmountPrecisionError";
+    this.amount = amount;
+    this.precision = precision;
+    this.destinationDecimals = destinationDecimals;
+    this.destinationChain = destinationChain;
   }
 }
