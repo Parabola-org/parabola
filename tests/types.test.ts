@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { AmountPrecisionError } from "../src/index.js";
 import type {
   ArcSigner,
   CompleteMintParams,
@@ -161,5 +162,17 @@ describe("completeMint direction and signer", () => {
     const wrong: CompleteMintParams = { from: "stellar", to: "arc", burnTxHash: "0xburn", signer: keypairSigner };
 
     expect(wrong.to).toBe("arc");
+  });
+});
+
+describe("AmountPrecisionError type and export", () => {
+  it("exposes typed properties on AmountPrecisionError", () => {
+    const err = new AmountPrecisionError("1.1234567", 7, 6, "arc");
+    expect(err.amount).toBe("1.1234567");
+    expect(err.precision).toBe(7);
+    expect(err.destinationDecimals).toBe(6);
+    expect(err.destinationChain).toBe("arc");
+    expect(err.name).toBe("AmountPrecisionError");
+    expect(err).toBeInstanceOf(Error);
   });
 });

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { decimalsForChain, toRawAmount, fromRawAmount } from "../src/utils/amount.js";
+import {
+  decimalsForChain,
+  toRawAmount,
+  fromRawAmount,
+  getSignificantDecimals,
+  assertSupportedPrecision,
+} from "../src/utils/amount.js";
+import { AmountPrecisionError } from "../src/index.js";
 import { ARC_TESTNET, STELLAR_TESTNET } from "../src/constants.js";
 
 describe("decimalsForChain", () => {
@@ -49,5 +56,51 @@ describe("fromRawAmount", () => {
       const raw = toRawAmount("42.5", chain);
       expect(fromRawAmount(raw, chain)).toBe("42.5");
     }
+  });
+});
+
+describe("getSignificantDecimals", () => {
+  it("counts fractional digits ignoring trailing zeros", () => {
+    expect(getSignificantDecimals("1")).toBe(0);
+    expect(getSignificantDecimals("1.10")).toBe(1);
+    expect(getSignificantDecimals("1.1230000")).toBe(3);
+    expect(getSignificantDecimals("0.0000001")).toBe(7);
+    expect(getSignificantDecimals("1.0000000")).toBe(0);
+  });
+
+  it("throws on malformed amounts rather than treating them as precision errors", () => {
+    expect(() => getSignificantDecimals("abc")).toThrow(/Invalid USDC amount/);
+    expect(() => getSignificantDecimals("1.")).toThrow(/Invalid USDC amount/);
+    expect(() => getSignificantDecimals("-1")).toThrow(/Invalid USDC amount/);
+    expect(() => getSignificantDecimals("1e-7")).toThrow(/Invalid USDC amount/);
+    expect(() => getSignificantDecimals(".5")).toThrow(/Invalid USDC amount/);
+  });
+});
+
+describe("assertSupportedPrecision", () => {
+  it("throws AmountPrecisionError when fractional precision exceeds destination decimals", () => {
+    expect(() => assertSupportedPrecision("1.1234567", "arc")).toThrow(AmountPrecisionError);
+
+    try {
+      assertSupportedPrecision("1.1234567", "arc");
+      expect.unreachable("should have thrown AmountPrecisionError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AmountPrecisionError);
+      const precisionErr = err as AmountPrecisionError;
+      expect(precisionErr.amount).toBe("1.1234567");
+      expect(precisionErr.precision).toBe(7);
+      expect(precisionErr.destinationDecimals).toBe(6);
+      expect(precisionErr.destinationChain).toBe("arc");
+      expect(precisionErr.name).toBe("AmountPrecisionError");
+    }
+  });
+
+  it("accepts inputs with trailing zeros whose significant precision fits the destination", () => {
+    expect(() => assertSupportedPrecision("1.1230000", "arc")).not.toThrow();
+    expect(() => assertSupportedPrecision("1.123456", "arc")).not.toThrow();
+  });
+
+  it("accepts up to 7 decimals for Stellar destination", () => {
+    expect(() => assertSupportedPrecision("1.1234567", "stellar")).not.toThrow();
   });
 });

@@ -33,7 +33,7 @@ vi.mock("../src/iris/poll.js", () => ({
 }));
 
 const { transfer, completeMint, resolveBurn } = await import("../src/transfer.js");
-const { TransferError, SubmissionTimeoutError, AttestationNotReadyError } = await import(
+const { TransferError, SubmissionTimeoutError, AttestationNotReadyError, AmountPrecisionError } = await import(
   "../src/errors.js"
 );
 const { encodeStellarForwardHook } = await import("../src/utils/encoding.js");
@@ -664,5 +664,76 @@ describe("transfer fast/standard fee handling", () => {
 
     expect(result.transferMode).toBe("fast");
     expect(result.fee).toBe("0.1");
+  });
+});
+
+describe("transfer amount precision pre-flight validation", () => {
+  it("rejects Stellar->Arc transfer with 7 significant decimals before any chain operation", async () => {
+    await expect(
+      transfer({
+        from: "stellar",
+        to: "arc",
+        amount: "1.1234567",
+        recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        speed: "standard",
+        signer: stellarSigner,
+      }),
+    ).rejects.toThrow(AmountPrecisionError);
+
+    expect(approveUsdcOnStellar).not.toHaveBeenCalled();
+    expect(burnUsdcOnStellar).not.toHaveBeenCalled();
+    expect(fetchFastTransferFeeBps).not.toHaveBeenCalled();
+  });
+
+  it("accepts Stellar->Arc transfer with trailing zeros fitting destination precision", async () => {
+    burnUsdcOnStellar.mockResolvedValue("0xstellarburn");
+    pollForAttestation.mockResolvedValue({
+      status: "complete",
+      attestation: "0xattestation",
+      message: buildBurnMessage(),
+    });
+    receiveMessageOnArc.mockResolvedValue("0xarcmint");
+
+    const result = await transfer({
+      from: "stellar",
+      to: "arc",
+      amount: "1.1230000",
+      recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      speed: "standard",
+      signer: stellarSigner,
+      options: { destinationSigner: arcSigner },
+    });
+
+    expect(result.status).toBe("success");
+    expect(approveUsdcOnStellar).toHaveBeenCalledWith(
+      11230000n,
+      stellarSigner,
+      "mainnet",
+      undefined,
+    );
+  });
+
+  it("accepts Arc->Stellar transfer with 6 decimal places", async () => {
+    checkStellarRecipientReady.mockResolvedValue({ exists: true, hasTrustline: true });
+    approveUsdcOnArc.mockResolvedValue("0xarcapprove");
+    burnUsdcOnArcWithStellarForward.mockResolvedValue("0xarcburn");
+    pollForAttestation.mockResolvedValue({
+      status: "complete",
+      attestation: "0xattestation",
+      message: buildBurnMessage(),
+    });
+    mintAndForwardOnStellar.mockResolvedValue("0xstellarmint");
+
+    const result = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "1.123456",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: { destinationSigner: stellarSigner },
+    });
+
+    expect(result.status).toBe("success");
   });
 });
