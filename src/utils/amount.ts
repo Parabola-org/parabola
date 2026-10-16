@@ -24,3 +24,13 @@ export function toRawAmount(amount: string, chain: ChainId): bigint {
 export function fromRawAmount(raw: bigint, chain: ChainId): string {
   return formatUsdcAmount(raw, decimalsForChain(chain));
 }
+
+/**
+ * Significant decimal places in a human-readable amount — the fraction digits
+ * that remain after trailing zeros are stripped. "1.1230000" carries 3
+ * significant decimals (not 7), so it is representable wherever "1.123" is.
+ */
+export function significantDecimals(amount: string): number {
+  const fraction = amount.split(".")[1] ?? "";
+  return fraction.replace(/0+$/, "").length;
+}

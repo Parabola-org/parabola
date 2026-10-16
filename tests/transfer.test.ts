@@ -666,3 +666,51 @@ describe("transfer fast/standard fee handling", () => {
     expect(result.fee).toBe("0.1");
   });
 });
+
+describe("transfer amount-precision preflight", () => {
+  it("rejects a Stellar->Arc amount whose significant precision exceeds 6 decimals before any burn", async () => {
+    await expect(
+      transfer({
+        from: "stellar",
+        to: "arc",
+        amount: "1.1234567",
+        recipient: "0x" + "11".repeat(20),
+        speed: "standard",
+        signer: stellarSigner,
+      }),
+    ).rejects.toMatchObject({
+      name: "AmountPrecisionError",
+      suppliedPrecision: 7,
+      destinationDecimals: 6,
+    });
+    expect(approveUsdcOnStellar).not.toHaveBeenCalled();
+    expect(burnUsdcOnStellar).not.toHaveBeenCalled();
+  });
+
+  it("accepts a padded-zero amount that fits within destination precision", async () => {
+    await expect(
+      transfer({
+        from: "stellar",
+        to: "arc",
+        amount: "1.1230000",
+        recipient: "0x" + "11".repeat(20),
+        speed: "standard",
+        signer: stellarSigner,
+      }),
+    ).resolves.toMatchObject({ burnTxHash: "stellarburnhash" });
+    expect(burnUsdcOnStellar).toHaveBeenCalled();
+  });
+
+  it("leaves Arc->Stellar amounts with 6 or fewer decimals untouched", async () => {
+    await expect(
+      transfer({
+        from: "arc",
+        to: "stellar",
+        amount: "1.123456",
+        recipient: FORWARD_RECIPIENT,
+        speed: "standard",
+        signer: arcSigner,
+      }),
+    ).resolves.toMatchObject({ burnTxHash: "0xburnhookhash" });
+  });
+});

@@ -22,8 +22,8 @@ import {
   DEFAULT_POLL_TIMEOUT_MS,
 } from "./constants.js";
 import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
-import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
-import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
+import { TransferError, SubmissionTimeoutError, AttestationNotReadyError, AmountPrecisionError } from "./errors.js";
+import { toRawAmount, fromRawAmount, decimalsForChain , significantDecimals } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
 import { decodeCctpMessage } from "./utils/message.js";
 import { approveUsdcOnArc, burnUsdcOnArcWithStellarForward, receiveMessageOnArc } from "./chains/arc.js";
@@ -73,6 +73,15 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   const minFinalityThreshold =
     transferMode === "fast" ? FINALITY_THRESHOLD_FAST : FINALITY_THRESHOLD_STANDARD;
   const amountRaw = toRawAmount(params.amount, params.from);
+  // Source-side parsing accepted the amount, but the destination may support
+  // fewer decimals — convertPrecision would silently truncate the excess on
+  // the wire. Judge significant precision (trailing zeros don't count) and
+  // refuse before any approve or burn is submitted.
+  const precision = significantDecimals(params.amount);
+  const destinationDecimals = decimalsForChain(params.to);
+  if (precision > destinationDecimals) {
+    throw new AmountPrecisionError(params.amount, precision, destinationDecimals);
+  }
   const maxFeeRaw =
     transferMode === "fast" && options.maxFee !== undefined
       ? parseUsdcAmount(options.maxFee, decimalsForChain(params.from))

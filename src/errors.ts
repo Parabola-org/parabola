@@ -29,6 +29,29 @@ export class TransferError extends Error {
   }
 }
 
+/**
+ * Thrown when the requested amount carries significant precision the destination
+ * chain's USDC cannot represent — e.g. a 7-decimal Stellar amount toward Arc's
+ * 6-decimal USDC. The burn would silently truncate the excess on the wire;
+ * refusing before the burn keeps the caller's quoted amount honest.
+ */
+export class AmountPrecisionError extends Error {
+  /** The destination chain's USDC decimals. */
+  readonly destinationDecimals: number;
+  /** The significant decimal places found in the supplied amount. */
+  readonly suppliedPrecision: number;
+
+  constructor(amount: string, suppliedPrecision: number, destinationDecimals: number) {
+    super(
+      `Amount ${amount} has ${suppliedPrecision} significant decimals but the destination ` +
+        `chain's USDC supports only ${destinationDecimals} — the transfer would silently truncate`
+    );
+    this.name = "AmountPrecisionError";
+    this.suppliedPrecision = suppliedPrecision;
+    this.destinationDecimals = destinationDecimals;
+  }
+}
+
 export type TransferErrorCode = "ATTESTATION_NOT_READY";
 
 /**
