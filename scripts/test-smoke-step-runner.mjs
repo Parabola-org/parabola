@@ -26,3 +26,42 @@ test("transient error detection",()=>{
  assert.equal(transientInfrastructureError({status:503}),true);
  assert.equal(transientInfrastructureError(new Error("insufficient funds")),false);
 });
+
+test("read-only burn inspection retries two transient errors and stops", async () => {
+ let attempts=0, waits=[];
+ const r=await runSmokeStep("inspect burn",async()=>{
+   attempts++;
+   throw Object.assign(new Error("RPC unavailable"),{status:503});
+ },{safeToRetry:true,retries:2,baseDelayMs:10,sleep:async ms=>{waits.push(ms)},log:silent});
+ assert.equal(r.status,"FAIL");
+ assert.equal(r.attempts,3);
+ assert.equal(attempts,3);
+ assert.deepEqual(waits,[10,20]);
+});
+test("a non-retryable 404 stops read-only inspection", async () => {
+ let attempts=0;
+ const r=await runSmokeStep("inspect burn",async()=>{
+   attempts++; throw Object.assign(new Error("not indexed"),{status:404});
+ },{safeToRetry:true,sleep:async()=>{},log:silent});
+ assert.equal(r.status,"FAIL");
+ assert.equal(attempts,1);
+});
+test("read-only inspection never changes transfer operation count", async () => {
+ let transferCount=0, lookups=0;
+ const transferResult=await runSmokeStep("transfer",async()=>{
+   transferCount++;
+   throw Object.assign(new Error("RPC timeout"),{status:503,burnTxHash:"0x123"});
+ },{safeToRetry:false,sleep:async()=>{},log:silent});
+ assert.equal(transferResult.status,"FAIL");
+ const inspect=await runSmokeStep("inspect burn",async()=>{
+   lookups++;
+   if(lookups<3)throw Object.assign(new Error("temporary outage"),{status:502});
+   return {burnTxHash:"0x123"};
+ },{safeToRetry:true,retries:2,sleep:async()=>{},log:silent});
+ assert.equal(inspect.status,"PASS");
+ assert.equal(inspect.attempts,3);
+ assert.equal(transferCount,1);
+});
+test("invalid retry budget is rejected",async()=>{
+ await assert.rejects(()=>runSmokeStep("bad",async()=>1,{retries:99}),RangeError);
+});
