@@ -28,3 +28,9 @@ export async function runSmokeStep(name, operation, options = {}) {
 export function formatStepSummary(rows) {
   return rows.map(({name,status,durationMs,attempts}) => `${status} ${name} (${durationMs}ms; attempts=${attempts})`).join("\n");
 }
+
+/** Safe console serialization of transfer/inspection receipts with bigint fields. */
+export function stringifySmokeValue(value) {
+  return JSON.stringify(value, (_key, item) =>
+    typeof item === "bigint" ? item.toString() : item, 2);
+}
