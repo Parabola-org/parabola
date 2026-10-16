@@ -283,6 +283,40 @@ describe("transfer (Stellar -> Arc)", () => {
     expect(result.burnTxHash).toBe("stellarburnhash");
     expect(result.mintTxHash).toBe("0xminthash");
   });
+
+  it("threads Stellar retry knobs into the approve and burn calls", async () => {
+    await transfer({
+      from: "stellar",
+      to: "arc",
+      amount: "25",
+      recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      speed: "standard",
+      signer: stellarSigner,
+      options: {
+        destinationSigner: arcSigner,
+        stellarRetryAttempts: 4,
+        stellarRetryDelayMs: 250,
+      },
+    });
+
+    expect(approveUsdcOnStellar.mock.calls[0]?.[4]).toEqual({ attempts: 4, delayMs: 250 });
+    expect(burnUsdcOnStellar.mock.calls[0]?.[0].retry).toEqual({ attempts: 4, delayMs: 250 });
+  });
+
+  it("passes no retry tuning when the knobs are omitted, preserving the built-in defaults", async () => {
+    await transfer({
+      from: "stellar",
+      to: "arc",
+      amount: "25",
+      recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      speed: "standard",
+      signer: stellarSigner,
+      options: { destinationSigner: arcSigner },
+    });
+
+    expect(approveUsdcOnStellar.mock.calls[0]?.[4]).toBeUndefined();
+    expect(burnUsdcOnStellar.mock.calls[0]?.[0].retry).toBeUndefined();
+  });
 });
 
 describe("transfer network selection", () => {

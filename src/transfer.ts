@@ -32,6 +32,7 @@ import {
   burnUsdcOnStellar,
   mintAndForwardOnStellar,
   checkStellarRecipientReady,
+  type StellarRetryOptions,
 } from "./chains/stellar.js";
 
 const FAST_ESTIMATED_DURATION_SECONDS = 15;
@@ -78,6 +79,15 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
       ? parseUsdcAmount(options.maxFee, decimalsForChain(params.from))
       : feeRaw;
 
+  // The two Stellar retry loops keep separate historical defaults (6x1500ms for
+  // the allowance wait, 3x2000ms for the RPC-lag retry); only pass a tuning
+  // object when the caller actually set a knob, so omitted options preserve
+  // those exact defaults rather than collapsing both loops onto one pair.
+  const stellarRetry =
+    options.stellarRetryAttempts !== undefined || options.stellarRetryDelayMs !== undefined
+      ? { attempts: options.stellarRetryAttempts, delayMs: options.stellarRetryDelayMs }
+      : undefined;
+
   const burnTxHash = await burn({
     params,
     network,
@@ -86,6 +96,7 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     amountRaw,
     maxFeeRaw,
     minFinalityThreshold,
+    stellarRetry,
   });
 
   // Everything past this point runs after the source-chain burn has already happened.
@@ -146,9 +157,18 @@ async function burn(args: {
   amountRaw: bigint;
   maxFeeRaw: bigint;
   minFinalityThreshold: number;
+  stellarRetry?: StellarRetryOptions;
 }): Promise<string> {
-  const { params, network, stellarRpcUrl, arcRpcUrl, amountRaw, maxFeeRaw, minFinalityThreshold } =
-    args;
+  const {
+    params,
+    network,
+    stellarRpcUrl,
+    arcRpcUrl,
+    amountRaw,
+    maxFeeRaw,
+    minFinalityThreshold,
+    stellarRetry,
+  } = args;
 
   if (params.from === "arc") {
     const signer = params.signer;
@@ -183,7 +203,7 @@ async function burn(args: {
   const mintRecipientBytes32 = evmAddressToBytes32(params.recipient);
   // Stellar's SEP-41 USDC token requires the same approve-before-transfer_from
   // pattern as ERC20 on Arc.
-  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl);
+  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl, stellarRetry);
   return runBurn(() =>
     burnUsdcOnStellar({
       amountRaw,
@@ -194,6 +214,7 @@ async function burn(args: {
       signer,
       network,
       rpcUrl: stellarRpcUrl,
+      retry: stellarRetry,
     }),
   );
 }

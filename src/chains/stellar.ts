@@ -86,6 +86,24 @@ async function pollTransactionStatus(server: rpc.Server, hash: string): Promise<
 }
 
 /**
+ * Caller-supplied tuning for Stellar's two bounded retry loops. Both loops keep
+ * their historical timing when the matching field is omitted, so passing
+ * nothing (or an empty object) is behaviorally identical to the pre-knobs
+ * release.
+ */
+export interface StellarRetryOptions {
+  /** Total attempts. Default 6 for the allowance wait, 3 for the RPC-lag retry. */
+  attempts?: number;
+  /** Milliseconds between attempts. Default 1500 for the allowance wait, 2000 for the RPC-lag retry. */
+  delayMs?: number;
+}
+
+const DEFAULT_ALLOWANCE_ATTEMPTS = 6;
+const DEFAULT_ALLOWANCE_DELAY_MS = 1500;
+const DEFAULT_RPC_LAG_ATTEMPTS = 3;
+const DEFAULT_RPC_LAG_DELAY_MS = 2000;
+
+/**
  * Approves Stellar's TokenMessengerMinter to pull USDC from the signer via the
  * SEP-41 token's transfer_from, mirroring the ERC20 approve step CCTP needs on
  * EVM chains. Required before deposit_for_burn, which otherwise fails with
@@ -96,6 +114,7 @@ export async function approveUsdcOnStellar(
   signer: StellarSigner,
   network: Network,
   rpcUrl?: string,
+  retry?: StellarRetryOptions,
 ): Promise<string> {
   const stellar = stellarConfig(network);
   const server = getServer(network, rpcUrl);
@@ -117,7 +136,14 @@ export async function approveUsdcOnStellar(
   // becoming queryable for simulation. Poll the on-chain allowance until it reflects
   // the approval (or fail with a clear error) before returning, so the two calls do not
   // proceed on disagreeing views of state.
-  await waitForAllowance(signer.publicKey, stellar.tokenMessengerMinter, amountRaw, network, rpcUrl);
+  await waitForAllowance(
+    signer.publicKey,
+    stellar.tokenMessengerMinter,
+    amountRaw,
+    network,
+    rpcUrl,
+    retry,
+  );
 
   return approveTxHash;
 }
@@ -213,9 +239,10 @@ async function waitForAllowance(
   minimum: bigint,
   network: Network,
   rpcUrl?: string,
+  retry?: StellarRetryOptions,
 ): Promise<void> {
-  const attempts = 6;
-  const delayMs = 1500;
+  const attempts = retry?.attempts ?? DEFAULT_ALLOWANCE_ATTEMPTS;
+  const delayMs = retry?.delayMs ?? DEFAULT_ALLOWANCE_DELAY_MS;
   for (let i = 0; i < attempts; i++) {
     const allowance = await getUsdcAllowance(owner, spender, network, rpcUrl);
     if (allowance >= minimum) return;
@@ -239,6 +266,7 @@ export async function burnUsdcOnStellar(params: {
   signer: StellarSigner;
   network: Network;
   rpcUrl?: string;
+  retry?: StellarRetryOptions;
 }): Promise<string> {
   const stellar = stellarConfig(params.network);
   const recipientBytes = Buffer.from(params.mintRecipientBytes32.slice(2), "hex");
@@ -266,8 +294,10 @@ export async function burnUsdcOnStellar(params: {
   // (txBadSeq) when the node serving this call's getAccount() has not seen the approve's
   // sequence bump. Both are handled by retrying: invokeContract() re-fetches the account on
   // every call, so a retry can reach a caught-up node.
-  return retryOnTransientRpcLag(() =>
-    invokeContract(stellar.tokenMessengerMinter, "deposit_for_burn", args, params.signer, params.network, params.rpcUrl),
+  return retryOnTransientRpcLag(
+    () =>
+      invokeContract(stellar.tokenMessengerMinter, "deposit_for_burn", args, params.signer, params.network, params.rpcUrl),
+    params.retry,
   );
 }
 
@@ -275,9 +305,12 @@ function isTransientRpcLagError(message: string): boolean {
   return message.includes("not enough allowance") || message.includes("txBadSeq");
 }
 
-async function retryOnTransientRpcLag(call: () => Promise<string>): Promise<string> {
-  const attempts = 3;
-  const delayMs = 2000;
+async function retryOnTransientRpcLag(
+  call: () => Promise<string>,
+  retry?: StellarRetryOptions,
+): Promise<string> {
+  const attempts = retry?.attempts ?? DEFAULT_RPC_LAG_ATTEMPTS;
+  const delayMs = retry?.delayMs ?? DEFAULT_RPC_LAG_DELAY_MS;
   for (let i = 0; i < attempts; i++) {
     try {
       return await call();

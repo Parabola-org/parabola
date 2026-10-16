@@ -125,6 +125,72 @@ describe("burnUsdcOnStellar (TokenMessengerMinter.deposit_for_burn)", () => {
       }),
     ).rejects.toThrow("some unrelated simulation failure");
   });
+
+  it("preserves the historical 3-attempt retry default when no retry options are given", async () => {
+    vi.useFakeTimers();
+    try {
+      const signerKeypair = mockHappyPathRpc();
+      const prepare = vi.spyOn(rpc.Server.prototype, "prepareTransaction").mockRejectedValue(
+        new Error('HostError: ... data:[\"not enough allowance to spend\", 0, 10000000] ...'),
+      );
+
+      const recipient = Keypair.random().publicKey();
+      const burnPromise = burnUsdcOnStellar({
+        amountRaw: 10_000_000n,
+        destinationDomain: 26,
+        mintRecipientBytes32: stellarAddressToBytes32(recipient),
+        maxFeeRaw: 1000n,
+        minFinalityThreshold: 2000,
+        signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        network: "testnet",
+      });
+      const assertion = expect(burnPromise).rejects.toThrow(/not enough allowance/);
+      await vi.runAllTimersAsync();
+      await assertion;
+
+      expect(prepare).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors custom attempts and delay passed as retry options", async () => {
+    vi.useFakeTimers();
+    try {
+      const signerKeypair = mockHappyPathRpc();
+      const prepare = vi.spyOn(rpc.Server.prototype, "prepareTransaction")
+        .mockRejectedValueOnce(
+          new Error('HostError: ... data:[\"not enough allowance to spend\", 0, 10000000] ...'),
+        )
+        .mockRejectedValueOnce(
+          new Error('HostError: ... data:[\"not enough allowance to spend\", 0, 10000000] ...'),
+        )
+        .mockImplementation(async (tx) => tx as any);
+
+      const startedAt = Date.now();
+      const recipient = Keypair.random().publicKey();
+      const burnPromise = burnUsdcOnStellar({
+        amountRaw: 10_000_000n,
+        destinationDomain: 26,
+        mintRecipientBytes32: stellarAddressToBytes32(recipient),
+        maxFeeRaw: 1000n,
+        minFinalityThreshold: 2000,
+        signer: { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        network: "testnet",
+        retry: { attempts: 4, delayMs: 250 },
+      });
+      const done = expect(burnPromise).resolves.toBe(FAKE_HASH);
+      await vi.runAllTimersAsync();
+      await done;
+
+      // Two transient failures then success: only the two failures consume a delay,
+      // and the custom delay is 250ms (the 2000ms default would report 4000ms).
+      expect(prepare).toHaveBeenCalledTimes(3);
+      expect(Date.now() - startedAt).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("approveUsdcOnStellar", () => {
@@ -169,6 +235,59 @@ describe("approveUsdcOnStellar", () => {
       approveUsdcOnStellar(10_000_000n, { publicKey: signerKeypair.publicKey(), keypair: signerKeypair }, "testnet"),
     ).rejects.toThrow(/did not reach/);
   }, 15_000);
+
+  it("preserves the historical 6-attempt default when no retry options are given", async () => {
+    vi.useFakeTimers();
+    try {
+      mockHappyPathRpc();
+      vi.spyOn(rpc.Server.prototype, "getLatestLedger").mockResolvedValue({ sequence: 100 } as any);
+      const simulate = vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
+        transactionData: {},
+        result: { retval: nativeToScVal(0n, { type: "i128" }) },
+      } as any);
+
+      const signerKeypair = Keypair.random();
+      const approval = approveUsdcOnStellar(10_000_000n, {
+        publicKey: signerKeypair.publicKey(),
+        keypair: signerKeypair,
+      }, "testnet");
+      const assertion = expect(approval).rejects.toThrow(/after 9s of polling/);
+      await vi.runAllTimersAsync();
+      await assertion;
+
+      expect(simulate).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors custom attempts and delay from stellarRetryAttempts/stellarRetryDelayMs", async () => {
+    vi.useFakeTimers();
+    try {
+      mockHappyPathRpc();
+      vi.spyOn(rpc.Server.prototype, "getLatestLedger").mockResolvedValue({ sequence: 100 } as any);
+      const simulate = vi.spyOn(rpc.Server.prototype, "simulateTransaction").mockResolvedValue({
+        transactionData: {},
+        result: { retval: nativeToScVal(0n, { type: "i128" }) },
+      } as any);
+
+      const signerKeypair = Keypair.random();
+      const approval = approveUsdcOnStellar(
+        10_000_000n,
+        { publicKey: signerKeypair.publicKey(), keypair: signerKeypair },
+        "testnet",
+        undefined,
+        { attempts: 2, delayMs: 500 },
+      );
+      const assertion = expect(approval).rejects.toThrow(/after 1s of polling/);
+      await vi.runAllTimersAsync();
+      await assertion;
+
+      expect(simulate).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("checkStellarRecipientReady", () => {

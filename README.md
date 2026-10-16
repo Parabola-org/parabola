@@ -202,6 +202,22 @@ await completeMint({
 
 `pollInterval`, `pollTimeout`, `stellarRpcUrl` and `arcRpcUrl` are also accepted at the top level for compatibility with earlier releases. When both shapes are present, `options` wins.
 
+### Tuning Stellar's retry loops
+
+A Stellar-source transfer performs two bounded retry loops whose timing was previously fixed: the post-approve allowance wait (6 attempts, 1500ms apart) and the transient RPC-lag retry around `deposit_for_burn` (3 attempts, 2000ms apart). If your RPC provider settles slowly — or you want a latency-sensitive path to fail faster — override both with one pair of knobs:
+
+```typescript
+await transfer({
+  /* ... */
+  options: {
+    stellarRetryAttempts: 10, // total attempts per loop (default 6 / 3)
+    stellarRetryDelayMs: 3000, // ms between attempts (default 1500 / 2000)
+  },
+});
+```
+
+Omitting either option preserves that loop's built-in default, so existing callers see no behavior change. Both options apply only to Stellar; Arc-side paths are untouched.
+
 ## Checking a Stellar recipient before you transfer
 
 A Stellar account doesn't exist on-ledger until it's funded with the minimum XLM reserve, and it can't hold USDC until it also has a USDC trustline. When the destination of a transfer is Stellar, `transfer()` checks both automatically before submitting anything on the source chain, and throws a clear error up front if the recipient isn't ready instead of letting the burn go through and only failing later at the mint step, with the USDC then stuck at the `CctpForwarder` contract.

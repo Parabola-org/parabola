@@ -53,6 +53,19 @@ export interface TransferOptionsBase {
    * client broadcasts. No effect on Stellar.
    */
   arcRpcUrl?: string;
+  /**
+   * Attempts for Stellar's bounded retry loops: the post-approve allowance wait
+   * and the transient RPC-lag retry around deposit_for_burn. Defaults preserve
+   * today's behavior (6 attempts for the allowance wait, 3 for the RPC-lag
+   * retry). No effect on Arc.
+   */
+  stellarRetryAttempts?: number;
+  /**
+   * Milliseconds between attempts in Stellar's bounded retry loops. Defaults
+   * preserve today's behavior (1500ms for the allowance wait, 2000ms for the
+   * RPC-lag retry). No effect on Arc.
+   */
+  stellarRetryDelayMs?: number;
 }
 
 /**

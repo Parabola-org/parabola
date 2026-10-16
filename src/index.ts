@@ -45,3 +45,5 @@ export type {
   ResolvedBurn,
   CctpBurnMessage,
 } from "./types.js";
+
+export type { StellarRetryOptions } from "./chains/stellar.js";

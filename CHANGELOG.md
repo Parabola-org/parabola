@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `options.stellarRetryAttempts` and `options.stellarRetryDelayMs`, which tune the two bounded Stellar retry loops (the post-approve allowance wait and the transient RPC-lag retry around `deposit_for_burn`). Omitting either option preserves that loop's built-in default, so existing callers see no behavior change. `StellarRetryOptions` is exported from the package root.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added
