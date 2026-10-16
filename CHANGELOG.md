@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ESLint with `typescript-eslint` (flat config in `eslint.config.mjs`): the recommended rule sets plus `no-floating-promises` and `no-misused-promises`. `pnpm lint` and `pnpm lint:fix` scripts, and a lint step in CI. `tests/lint-rules.fixture.ts` fails lint if either promise rule stops firing.
+- `stellarRetryAttempts` and `stellarRetryDelayMs` transfer options, which tune the two Stellar recovery loops (the post-approve allowance wait and the transient-lag retry around `deposit_for_burn`). Omitted fields keep the current defaults of 6 x 1500ms and 3 x 2000ms. `StellarRetryOptions` is exported.
 
 ## [0.4.0] - 2026-10-07
 
