@@ -4,8 +4,6 @@ import type {
   TransferMode,
   ArcSigner,
   StellarSigner,
-  ChainId,
-  Signer,
   Network,
   CompleteMintParams,
   CompleteMintResult,
@@ -106,17 +104,30 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     let mintTxHash = "";
     let status: TransferResult["status"] = "pending";
 
-    if (options.destinationSigner && attestation.message && attestation.attestation) {
-      mintTxHash = await mint({
-        to: params.to,
-        message: attestation.message as `0x${string}`,
-        attestation: attestation.attestation as `0x${string}`,
-        signer: options.destinationSigner,
-        network,
-        stellarRpcUrl,
-        arcRpcUrl,
-      });
-      status = "success";
+    if (attestation.message && attestation.attestation) {
+      if (params.to === "arc" && params.options?.destinationSigner) {
+        mintTxHash = await mint({
+          to: "arc",
+          message: attestation.message as `0x${string}`,
+          attestation: attestation.attestation as `0x${string}`,
+          signer: params.options.destinationSigner,
+          network,
+          stellarRpcUrl,
+          arcRpcUrl,
+        });
+        status = "success";
+      } else if (params.to === "stellar" && params.options?.destinationSigner) {
+        mintTxHash = await mint({
+          to: "stellar",
+          message: attestation.message as `0x${string}`,
+          attestation: attestation.attestation as `0x${string}`,
+          signer: params.options.destinationSigner,
+          network,
+          stellarRpcUrl,
+          arcRpcUrl,
+        });
+        status = "success";
+      }
     }
 
     return {
@@ -240,22 +251,22 @@ async function runBurn(call: () => Promise<string>): Promise<string> {
   }
 }
 
-async function mint(args: {
-  to: ChainId;
+type MintArgs = {
   message: `0x${string}`;
   attestation: `0x${string}`;
-  signer: Signer;
   network: Network;
   stellarRpcUrl?: string;
   arcRpcUrl?: string;
-}): Promise<string> {
-  const { to, message, attestation, signer, network, stellarRpcUrl, arcRpcUrl } = args;
+} & ({ to: "arc"; signer: ArcSigner } | { to: "stellar"; signer: StellarSigner });
 
-  if (to === "arc") {
+async function mint(args: MintArgs): Promise<string> {
+  const { message, attestation, network, stellarRpcUrl, arcRpcUrl } = args;
+
+  if (args.to === "arc") {
     return receiveMessageOnArc({
       message,
       attestation,
-      signer: signer as ArcSigner,
+      signer: args.signer,
       network,
       rpcUrl: arcRpcUrl,
     });
@@ -263,7 +274,7 @@ async function mint(args: {
   return mintAndForwardOnStellar({
     message,
     attestation,
-    signer: signer as StellarSigner,
+    signer: args.signer,
     network,
     rpcUrl: stellarRpcUrl,
   });
@@ -349,10 +360,20 @@ export async function completeMint(params: CompleteMintParams): Promise<Complete
       );
     }
     await assertStellarRecipientReady(forwardRecipient, network, stellarRpcUrl);
+    const mintTxHash = await mint({
+      to: "stellar",
+      message: attestation.message as `0x${string}`,
+      attestation: attestation.attestation as `0x${string}`,
+      signer: params.signer,
+      network,
+      stellarRpcUrl,
+      arcRpcUrl,
+    });
+    return { mintTxHash, attestationHash: attestation.attestation };
   }
 
   const mintTxHash = await mint({
-    to: params.to,
+    to: "arc",
     message: attestation.message as `0x${string}`,
     attestation: attestation.attestation as `0x${string}`,
     signer: params.signer,
