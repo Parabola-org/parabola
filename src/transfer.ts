@@ -21,7 +21,7 @@ import {
 } from "./constants.js";
 import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
 import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
-import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
+import { toRawAmount, fromRawAmount, decimalsForChain, assertDestinationPrecision } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
 import { decodeCctpMessage } from "./utils/message.js";
 import { approveUsdcOnArc, burnUsdcOnArcWithStellarForward, receiveMessageOnArc } from "./chains/arc.js";
@@ -39,6 +39,7 @@ function domainFor(chain: "arc" | "stellar"): number {
 }
 
 export async function transfer(params: TransferParams): Promise<TransferResult> {
+  assertDestinationPrecision(params.amount, params.to);
   const start = Date.now();
   const options = params.options ?? {};
   const network: Network = params.network ?? "mainnet";
@@ -192,9 +193,16 @@ async function burn(args: {
 
   const signer = params.signer;
   const mintRecipientBytes32 = evmAddressToBytes32(params.recipient);
+  const stellarRetry =
+    params.options?.stellarRetryAttempts !== undefined || params.options?.stellarRetryDelayMs !== undefined
+      ? {
+          attempts: params.options?.stellarRetryAttempts,
+          delayMs: params.options?.stellarRetryDelayMs,
+        }
+      : undefined;
   // Stellar's SEP-41 USDC token requires the same approve-before-transfer_from
   // pattern as ERC20 on Arc.
-  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl);
+  await approveUsdcOnStellar(amountRaw, signer, network, stellarRpcUrl, stellarRetry);
   return runBurn(() =>
     burnUsdcOnStellar({
       amountRaw,
@@ -205,6 +213,7 @@ async function burn(args: {
       signer,
       network,
       rpcUrl: stellarRpcUrl,
+      retry: stellarRetry,
     }),
   );
 }
