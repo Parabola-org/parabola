@@ -119,6 +119,17 @@ export interface EstimateFeeParams {
   speed: TransferSpeed;
   /** Which deployment to quote against. Default "mainnet". */
   network?: Network;
+  /**
+   * Max USDC fee tolerated for a fast transfer. Matches transfer()'s
+   * options.maxFee — when the quoted fee exceeds this, the estimate returns
+   * "standard" just as transfer() would fall back.
+   */
+  maxFee?: string;
+  /**
+   * Max seconds to wait before falling back to standard. Matches
+   * transfer()'s options.maxWait.
+   */
+  maxWait?: number;
 }
 
 export interface FeeEstimate {

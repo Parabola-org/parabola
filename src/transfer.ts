@@ -22,6 +22,7 @@ import {
   DEFAULT_POLL_TIMEOUT_MS,
 } from "./constants.js";
 import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
+import { resolveTransferMode } from "./estimate.js";
 import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
 import { toRawAmount, fromRawAmount, decimalsForChain } from "./utils/amount.js";
 import { parseUsdcAmount, stellarAddressToBytes32, evmAddressToBytes32, encodeStellarForwardHook } from "./utils/encoding.js";
@@ -33,8 +34,6 @@ import {
   mintAndForwardOnStellar,
   checkStellarRecipientReady,
 } from "./chains/stellar.js";
-
-const FAST_ESTIMATED_DURATION_SECONDS = 15;
 
 function domainFor(chain: "arc" | "stellar"): number {
   return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;
@@ -50,25 +49,18 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
   const pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeout = options.pollTimeout ?? DEFAULT_POLL_TIMEOUT_MS;
 
-  let transferMode: TransferMode = params.speed;
-  let feeRaw = 0n;
-
-  if (transferMode === "fast") {
-    if (options.maxWait !== undefined && FAST_ESTIMATED_DURATION_SECONDS > options.maxWait) {
-      transferMode = "standard";
-    } else {
-      const feeBps = await fetchFastTransferFeeBps(domainFor(params.from), domainFor(params.to), useSandbox);
-      const amountRawSource = toRawAmount(params.amount, params.from);
-      feeRaw = (amountRawSource * BigInt(feeBps)) / 10_000n;
-      if (options.maxFee !== undefined) {
-        const maxFeeRaw = parseUsdcAmount(options.maxFee, decimalsForChain(params.from));
-        if (feeRaw > maxFeeRaw) {
-          transferMode = "standard";
-          feeRaw = 0n;
-        }
-      }
-    }
-  }
+  // One implementation of the fast-vs-standard fallback — shared with
+  // estimateFee so a quoted mode can never drift from the executed mode.
+  const decided = await resolveTransferMode({
+    speed: params.speed,
+    amountRaw: toRawAmount(params.amount, params.from),
+    chain: params.from,
+    maxFee: options.maxFee,
+    maxWait: options.maxWait,
+    fetchFeeBps: () => fetchFastTransferFeeBps(domainFor(params.from), domainFor(params.to), useSandbox),
+  });
+  const transferMode: TransferMode = decided.mode;
+  let feeRaw = decided.feeRaw;
 
   const minFinalityThreshold =
     transferMode === "fast" ? FINALITY_THRESHOLD_FAST : FINALITY_THRESHOLD_STANDARD;
