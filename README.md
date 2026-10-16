@@ -146,11 +146,15 @@ const estimate = await estimateFee({
   to: "stellar",
   amount: "100",
   speed: "fast",
+  maxFee: "0.05", // optional: falls back to standard if quoted fee exceeds this
+  maxWait: 20,    // optional: falls back to standard if fast estimate exceeds this
 });
 
 console.log(estimate);
 // { protocolFee: "0.01", estimatedDurationSeconds: 15, transferMode: "fast" }
 ```
+
+`estimateFee` applies the exact same fallback rules as `transfer()`: if `maxWait` is lower than the fast transfer estimate (15s), or if the fee quoted by Iris exceeds `maxFee`, it returns `transferMode: "standard"` and `protocolFee: "0"`, ensuring quotes never drift from transfer behavior.
 
 ## How it works
 
@@ -164,7 +168,7 @@ Along the way, Parabola also:
 
 - Translates Stellar `G...`/`C...` addresses into the 32-byte format CCTP messages require, and encodes the forward-recipient hook Stellar-bound transfers need.
 - Converts between Stellar USDC's 7-decimal precision and Arc USDC's 6-decimal precision, so you always work in human-readable amounts like `"10.50"`. See [Amounts and decimals](#amounts-and-decimals).
-- Picks Standard or Fast transfer based on `speed`, quotes the Fast fee from Circle's fees endpoint first, and falls back to Standard automatically if the quoted fee exceeds `maxFee`.
+- Picks Standard or Fast transfer based on `speed`, quotes the Fast fee from Circle's fees endpoint first, and falls back to Standard automatically if the quoted fee exceeds `maxFee` or if estimated duration exceeds `maxWait`.
 
 ### Completing the mint: `destinationSigner` and `completeMint`
 
