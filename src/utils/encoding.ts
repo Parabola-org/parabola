@@ -27,6 +27,17 @@ export function stellarAddressToBytes32(address: string): `0x${string}` {
 /** Inverse of stellarAddressToBytes32 for ed25519 public keys (G... accounts). */
 export function bytes32ToStellarAddress(bytes32: `0x${string}`): string {
   const hex = bytes32.startsWith("0x") ? bytes32.slice(2) : bytes32;
+  
+  // Require exactly 64 hex chars (32 bytes)
+  if (hex.length !== 64) {
+    throw new Error(`Expected 64 hex characters (32 bytes), got ${hex.length}`);
+  }
+  
+  // Ensure pure hex string (regex to match exactly 64 hex chars)
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error(`Invalid hex string: ${bytes32}`);
+  }
+
   const raw = Buffer.from(hex, "hex");
   return StrKey.encodeEd25519PublicKey(raw);
 }

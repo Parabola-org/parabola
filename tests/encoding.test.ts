@@ -35,6 +35,30 @@ describe("stellarAddressToBytes32 / bytes32ToStellarAddress", () => {
       /Invalid Stellar address/,
     );
   });
+
+  it("throws on odd-length hex string", () => {
+    expect(() => bytes32ToStellarAddress("0x12345")).toThrow(
+      /Expected 64 hex characters/,
+    );
+  });
+
+  it("throws on non-hex characters", () => {
+    expect(() => bytes32ToStellarAddress("0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")).toThrow(
+      /Invalid hex string/,
+    );
+  });
+
+  it("throws on wrong byte length", () => {
+    expect(() => bytes32ToStellarAddress("0x1234")).toThrow(
+      /Expected 64 hex characters/,
+    );
+  });
+
+  it("throws on missing 0x prefix", () => {
+    expect(() => bytes32ToStellarAddress("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")).toThrow(
+      /Expected 64 hex characters/,
+    );
+  });
 });
 
 describe("encodeStellarForwardHook", () => {
@@ -119,7 +143,7 @@ describe("parseUsdcAmount / formatUsdcAmount", () => {
     const amounts = ["0.000001", "1234.56", "1", "999999.999999"];
     for (const amount of amounts) {
       expect(formatUsdcAmount(parseUsdcAmount(amount, 6), 6)).toBe(amount);
-    }
+    };
   });
 });
 
