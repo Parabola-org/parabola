@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pre-flight precision validation in `transfer()`: rejects amounts specifying more significant decimal places than the destination chain supports (e.g. 7 decimals for Stellar→Arc) by throwing a typed `AmountPrecisionError` before any approval or burn transaction is broadcast. Inputs with trailing zeros within the supported precision (e.g. `"1.1230000"`) continue to be accepted.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

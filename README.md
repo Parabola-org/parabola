@@ -233,7 +233,7 @@ That distinction matters most for a balance floor. A floor expressed in the wron
 | Stellar USDC balance | `STELLAR_MAINNET.usdcDecimals`, 7 |
 | `TransferParams.amount`, `maxFee`, `FeeEstimate.protocolFee` | Whole USDC, e.g. `"10.50"` |
 
-Prefer reading the scale off the chain object rather than hardcoding it. `decimalsForChain(chain)` resolves the USDC scale for either chain and is the same function `transfer()` uses to interpret `amount`.
+Prefer reading the scale off the chain object rather than hardcoding it. `decimalsForChain(chain)` resolves the USDC scale for either chain and is the same function `transfer()` uses to interpret `amount`. Additionally, `transfer()` validates destination precision pre-flight, throwing `AmountPrecisionError` if `amount` specifies more significant fractional decimal places than the destination chain supports (e.g. 7 decimals when transferring to Arc).
 
 ## Completing a burn you did not create
 
