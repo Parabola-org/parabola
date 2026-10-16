@@ -35,6 +35,8 @@ export type StellarSigner = { publicKey: string } & (
 export type Signer = ArcSigner | StellarSigner;
 
 export interface TransferOptionsBase {
+  /** Optional AbortSignal to cancel in-flight polling loops and operations. */
+  signal?: AbortSignal;
   /** Max USDC fee tolerated for a fast transfer. Falls back to standard if the quoted fee exceeds this. */
   maxFee?: string;
   /** Max seconds to wait before falling back to standard transfer. */
@@ -149,6 +151,8 @@ export interface FeeEstimate {
  * caller that already holds a TransferOptions-shaped object can reuse it.
  */
 export interface CompleteMintOptions {
+  /** Optional AbortSignal to cancel in-flight attestation polling. */
+  signal?: AbortSignal;
   /** Milliseconds between Iris attestation polls. Default 3000. */
   pollInterval?: number;
   /** Milliseconds before polling gives up. Default 300000. */
@@ -179,6 +183,8 @@ interface CompleteMintParamsBase {
   network?: Network;
   /** Polling and RPC knobs. Preferred over the top-level equivalents below. */
   options?: CompleteMintOptions;
+  /** Optional AbortSignal to cancel in-flight attestation polling. */
+  signal?: AbortSignal;
   /** Milliseconds between Iris attestation polls. Default 3000. */
   pollInterval?: number;
   /** Milliseconds before polling gives up. Default 300000. */
@@ -201,6 +207,8 @@ export interface ResolveBurnParams {
   burnTxHash: string;
   /** Which deployment the burn happened on. Default "mainnet". */
   network?: Network;
+  /** Optional AbortSignal to cancel network reads. */
+  signal?: AbortSignal;
 }
 
 /**
