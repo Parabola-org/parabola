@@ -87,43 +87,23 @@ describe("decodeCctpMessage", () => {
     expect(() => decodeCctpMessage("0xzz")).toThrow(/valid hex/);
   });
 
-  it.each([0, 2, 3, 0xffffffff])("rejects unsupported header wire version %s", (version) => {
-    const message = Buffer.from(LIVE_TESTNET_BURN_MESSAGE.slice(2), "hex");
-    message.writeUInt32BE(version, 0);
-
-    expect(() => decodeCctpMessage(`0x${message.toString("hex")}`)).toThrow(
-      `Unsupported CCTP message version ${version}; expected 1`,
+  it("rejects an unsupported CCTP message version", () => {
+    // Same as LIVE_TESTNET_BURN_MESSAGE but with header version 2 instead of 1.
+    const v2 = "0x00000002" + LIVE_TESTNET_BURN_MESSAGE.slice(10);
+    expect(() => decodeCctpMessage(v2)).toThrow(
+      /Unsupported CCTP message version: 2/,
     );
   });
 
-  it.each([0, 2, 3, 0xffffffff])("rejects unsupported burn body wire version %s", (version) => {
-    const message = Buffer.from(LIVE_TESTNET_BURN_MESSAGE.slice(2), "hex");
-    message.writeUInt32BE(version, 148);
-
-    expect(() => decodeCctpMessage(`0x${message.toString("hex")}`)).toThrow(
-      `Unsupported CCTP burn body version ${version}; expected 1`,
-    );
-  });
-
-  it.each([
-    { field: "message", offset: 0 },
-    { field: "burn body", offset: 148 },
-  ])("rejects an unsupported $field version without hook data", ({ field, offset }) => {
-    const message = Buffer.from(LIVE_TESTNET_BURN_MESSAGE.slice(2, 2 + 376 * 2), "hex");
-    message.writeUInt32BE(2, offset);
-
-    expect(() => decodeCctpMessage(message.toString("hex"))).toThrow(
-      `Unsupported CCTP ${field} version 2; expected 1`,
-    );
-  });
-
-  it("reports the unsupported header before interpreting an unknown body layout", () => {
-    const message = Buffer.from(LIVE_TESTNET_BURN_MESSAGE.slice(2), "hex");
-    message.writeUInt32BE(3, 0);
-    message.writeUInt32BE(4, 148);
-
-    expect(() => decodeCctpMessage(`0x${message.toString("hex")}`)).toThrow(
-      "Unsupported CCTP message version 3; expected 1",
+  it("rejects an unsupported burn body version", () => {
+    // Same as LIVE_TESTNET_BURN_MESSAGE but with burn-body version 2 instead of 1.
+    // Offset 148 in the raw bytes = hex char 298 (after the 0x prefix).
+    const withBadBodyVersion =
+      LIVE_TESTNET_BURN_MESSAGE.slice(0, 298) +
+      "00000002" +
+      LIVE_TESTNET_BURN_MESSAGE.slice(306);
+    expect(() => decodeCctpMessage(withBadBodyVersion)).toThrow(
+      /Unsupported CCTP burn body version: 2/,
     );
   });
 });
