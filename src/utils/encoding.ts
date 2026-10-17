@@ -24,10 +24,31 @@ export function stellarAddressToBytes32(address: string): `0x${string}` {
   return pad(toHex(raw), { size: 32 });
 }
 
-/** Inverse of stellarAddressToBytes32 for ed25519 public keys (G... accounts). */
+/**
+ * Inverse of stellarAddressToBytes32 for ed25519 public keys (G... accounts).
+ *
+ * Accepts a 0x-prefixed 64-character hex string (32 bytes) and returns the
+ * corresponding Stellar G... strkey. The full 32-byte value is passed directly
+ * to StrKey.encodeEd25519PublicKey -- no truncation, no left-padding, no
+ * right-padding. For a value that was produced by stellarAddressToBytes32
+ * (which left-pads a 32-byte key), the round-trip is exact:
+ *
+ *   stellarAddressToBytes32(addr) → bytes32ToStellarAddress(...) === addr
+ *
+ * For a 32-byte C... contract address (not a valid ed25519 public key),
+ * StrKey.encodeEd25519PublicKey will throw because the checksum/version byte
+ * doesn't match the ed25519 curve prefix. Use stellarAddressToBytes32 for
+ * contract addresses -- the inverse is not supported here.
+ */
+const BYTES32_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+
 export function bytes32ToStellarAddress(bytes32: `0x${string}`): string {
-  const hex = bytes32.startsWith("0x") ? bytes32.slice(2) : bytes32;
-  const raw = Buffer.from(hex, "hex");
+  if (!BYTES32_PATTERN.test(bytes32)) {
+    throw new Error(
+      `bytes32ToStellarAddress: expected a 0x-prefixed 64-character hex string (32 bytes), got: ${bytes32}`,
+    );
+  }
+  const raw = Buffer.from(bytes32.slice(2), "hex");
   return StrKey.encodeEd25519PublicKey(raw);
 }
 

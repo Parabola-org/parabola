@@ -37,6 +37,60 @@ describe("stellarAddressToBytes32 / bytes32ToStellarAddress", () => {
   });
 });
 
+describe("bytes32ToStellarAddress validation", () => {
+  it("accepts a valid 0x-prefixed 64-hex string and returns the original G address", () => {
+    const keypair = Keypair.random();
+    const address = keypair.publicKey();
+    const bytes32 = stellarAddressToBytes32(address);
+    expect(bytes32ToStellarAddress(bytes32)).toBe(address);
+  });
+
+  it("throws on a string missing the 0x prefix", () => {
+    const hex = `${"1".repeat(64)}`;
+    expect(() => bytes32ToStellarAddress(hex as `0x${string}`)).toThrow(
+      /bytes32ToStellarAddress/,
+    );
+  });
+
+  it("throws on a truncated hex string (fewer than 64 hex chars)", () => {
+    expect(() => bytes32ToStellarAddress("0x1234" as `0x${string}`)).toThrow(
+      /bytes32ToStellarAddress/,
+    );
+  });
+
+  it("throws on an odd-length hex string", () => {
+    expect(() => bytes32ToStellarAddress(`0x${"a".repeat(63)}` as `0x${string}`)).toThrow(
+      /bytes32ToStellarAddress/,
+    );
+  });
+
+  it("throws on a string with non-hex characters", () => {
+    expect(() =>
+      bytes32ToStellarAddress("0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" as `0x${string}`),
+    ).toThrow(/bytes32ToStellarAddress/);
+  });
+
+  it("throws on a string longer than 64 hex chars", () => {
+    expect(() =>
+      bytes32ToStellarAddress(`0x${"a".repeat(66)}` as `0x${string}`),
+    ).toThrow(/bytes32ToStellarAddress/);
+  });
+
+  it("throws on an empty string", () => {
+    expect(() => bytes32ToStellarAddress("" as `0x${string}`)).toThrow(
+      /bytes32ToStellarAddress/,
+    );
+  });
+
+  it("round-trips for multiple random keys", () => {
+    for (let i = 0; i < 5; i++) {
+      const kp = Keypair.random();
+      const bytes32 = stellarAddressToBytes32(kp.publicKey());
+      expect(bytes32ToStellarAddress(bytes32)).toBe(kp.publicKey());
+    }
+  });
+});
+
 describe("encodeStellarForwardHook", () => {
   it("encodes a G... recipient into the CctpForwarder hook payload format", () => {
     const keypair = Keypair.random();
