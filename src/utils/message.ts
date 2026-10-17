@@ -38,6 +38,19 @@ const BODY_OFFSET = {
 /** Every CCTP V2 message header is this long, and every burn body at least this long. */
 const V2_BURN_MESSAGE_MINIMUM_LENGTH = BODY_OFFSET.hookData;
 
+/**
+ * The only CCTP message version this SDK supports. Version 1 is the current CCTP V2
+ * release; other versions may change field layouts and must not be decoded against
+ * these offsets.
+ */
+const SUPPORTED_MESSAGE_VERSION = 1;
+
+/**
+ * The only burn-body version this SDK supports. Burn-body version 1 is the current
+ * CCTP V2 burn message layout; other versions may change field layouts.
+ */
+const SUPPORTED_BURN_BODY_VERSION = 1;
+
 export interface CctpBurnMessage {
   version: number;
   sourceDomain: number;
@@ -90,6 +103,20 @@ export function decodeCctpMessage(message: string): CctpBurnMessage {
   if (raw.length < V2_BURN_MESSAGE_MINIMUM_LENGTH) {
     throw new Error(
       `CCTP message is ${raw.length} bytes, shorter than the ${V2_BURN_MESSAGE_MINIMUM_LENGTH}-byte V2 burn message minimum`,
+    );
+  }
+
+  const version = raw.readUInt32BE(HEADER_OFFSET.version);
+  if (version !== SUPPORTED_MESSAGE_VERSION) {
+    throw new Error(
+      `Unsupported CCTP message version: ${version}. This SDK only supports version ${SUPPORTED_MESSAGE_VERSION}.`,
+    );
+  }
+
+  const burnBodyVersion = raw.readUInt32BE(BODY_OFFSET.version);
+  if (burnBodyVersion !== SUPPORTED_BURN_BODY_VERSION) {
+    throw new Error(
+      `Unsupported CCTP burn body version: ${burnBodyVersion}. This SDK only supports burn body version ${SUPPORTED_BURN_BODY_VERSION}.`,
     );
   }
 

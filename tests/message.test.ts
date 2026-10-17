@@ -86,6 +86,26 @@ describe("decodeCctpMessage", () => {
   it("rejects a non-hex message", () => {
     expect(() => decodeCctpMessage("0xzz")).toThrow(/valid hex/);
   });
+
+  it("rejects an unsupported CCTP message version", () => {
+    // Same as LIVE_TESTNET_BURN_MESSAGE but with header version 2 instead of 1.
+    const v2 = "0x00000002" + LIVE_TESTNET_BURN_MESSAGE.slice(10);
+    expect(() => decodeCctpMessage(v2)).toThrow(
+      /Unsupported CCTP message version: 2/,
+    );
+  });
+
+  it("rejects an unsupported burn body version", () => {
+    // Same as LIVE_TESTNET_BURN_MESSAGE but with burn-body version 2 instead of 1.
+    // Offset 148 in the raw bytes = hex char 298 (after the 0x prefix).
+    const withBadBodyVersion =
+      LIVE_TESTNET_BURN_MESSAGE.slice(0, 298) +
+      "00000002" +
+      LIVE_TESTNET_BURN_MESSAGE.slice(306);
+    expect(() => decodeCctpMessage(withBadBodyVersion)).toThrow(
+      /Unsupported CCTP burn body version: 2/,
+    );
+  });
 });
 
 describe("decodeStellarForwardHook", () => {
