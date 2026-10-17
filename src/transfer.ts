@@ -40,8 +40,34 @@ function domainFor(chain: "arc" | "stellar"): number {
   return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;
 }
 
+/**
+ * Validates that the parsed amount, when expressed in source-chain precision, does not
+ * exceed the destination chain's USDC decimal precision. This catches cases where a
+ * user provides an amount with more decimal places than the destination can represent
+ * (e.g. "1.234567" from Stellar→Arc where Arc only supports 6 decimals).
+ */
+function assertAmountFitsDestination(amount: string, params: {
+  from: ChainId;
+  to: ChainId;
+}): void {
+  const destDecimals = decimalsForChain(params.to);
+  const sourceDecimals = decimalsForChain(params.from);
+  const fractionPart = amount.split(".")[1] ?? "";
+  if (fractionPart.length > destDecimals) {
+    throw new Error(
+      `Amount ${amount} has ${fractionPart.length} decimal places, which exceeds the ` +
+      `${destDecimals} decimals supported by the destination chain (${params.to}). ` +
+      `Source chain (${params.from}) supports ${sourceDecimals} decimals, but the amount ` +
+      `will be minted on ${params.to} and must fit within its precision.`,
+    );
+  }
+}
+
 export async function transfer(params: TransferParams): Promise<TransferResult> {
   const start = Date.now();
+
+  assertAmountFitsDestination(params.amount, { from: params.from, to: params.to });
+
   const options = params.options ?? {};
   const network: Network = params.network ?? "mainnet";
   const useSandbox = network === "testnet";
