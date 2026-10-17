@@ -20,6 +20,7 @@ import {
   FINALITY_THRESHOLD_FAST,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_POLL_TIMEOUT_MS,
+  FAST_ESTIMATED_DURATION_SECONDS,
 } from "./constants.js";
 import { fetchFastTransferFeeBps, pollForAttestation, getAttestation } from "./iris/poll.js";
 import { TransferError, SubmissionTimeoutError, AttestationNotReadyError } from "./errors.js";
@@ -33,8 +34,6 @@ import {
   mintAndForwardOnStellar,
   checkStellarRecipientReady,
 } from "./chains/stellar.js";
-
-const FAST_ESTIMATED_DURATION_SECONDS = 15;
 
 function domainFor(chain: "arc" | "stellar"): number {
   return chain === "arc" ? ARC_DOMAIN : STELLAR_DOMAIN;

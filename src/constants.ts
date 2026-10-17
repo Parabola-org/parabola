@@ -79,6 +79,10 @@ export const FINALITY_THRESHOLD_FAST = 1000;
 export const DEFAULT_POLL_INTERVAL_MS = 3000;
 export const DEFAULT_POLL_TIMEOUT_MS = 300_000;
 
+// Estimated duration of a fast transfer in seconds, shared by transfer() and
+// estimateFee() so the fallback logic stays consistent between the two.
+export const FAST_ESTIMATED_DURATION_SECONDS = 15;
+
 // A Stellar transaction's time bound is fixed at build time, before prepareTransaction's
 // RPC round trip and before signTransaction. Extension wallets such as Freighter add human
 // review time to signing, so a short bound can expire (txTooLate) while the signer is still

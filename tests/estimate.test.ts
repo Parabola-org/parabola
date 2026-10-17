@@ -54,4 +54,91 @@ describe("estimateFee", () => {
 
     expect(fetchFastTransferFeeBps).toHaveBeenCalledWith(26, 27, true);
   });
+
+  it("reports fastAvailable: true for standard-speed estimates", async () => {
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "standard",
+    });
+
+    expect(estimate).toMatchObject({
+      protocolFee: "0",
+      transferMode: "standard",
+      fastAvailable: true,
+    });
+  });
+
+  it("reports fastAvailable: true when fast transfer is within constraints", async () => {
+    fetchFastTransferFeeBps.mockResolvedValue(10); // 0.1%
+
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxFee: "1",
+      maxWait: 30,
+    });
+
+    expect(estimate).toMatchObject({
+      transferMode: "fast",
+      fastAvailable: true,
+      protocolFee: "0.1",
+    });
+  });
+
+  it("falls back to standard and reports fastAvailable: false when quoted fee exceeds maxFee", async () => {
+    fetchFastTransferFeeBps.mockResolvedValue(100); // 1% — exceeds maxFee below
+
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "10",
+      speed: "fast",
+      maxFee: "0.01",
+    });
+
+    expect(estimate).toMatchObject({
+      transferMode: "standard",
+      fastAvailable: false,
+      protocolFee: "0",
+      estimatedDurationSeconds: 20,
+    });
+  });
+
+  it("falls back to standard and reports fastAvailable: false when fast duration exceeds maxWait", async () => {
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxWait: 10,
+    });
+
+    expect(estimate).toMatchObject({
+      transferMode: "standard",
+      fastAvailable: false,
+      protocolFee: "0",
+      estimatedDurationSeconds: 20,
+    });
+    // maxWait short-circuits before any fee fetch
+    expect(fetchFastTransferFeeBps).not.toHaveBeenCalled();
+  });
+
+  it("uses fast mode when maxWait equals the fast estimate duration", async () => {
+    fetchFastTransferFeeBps.mockResolvedValue(10);
+
+    const estimate = await estimateFee({
+      from: "arc",
+      to: "stellar",
+      amount: "100",
+      speed: "fast",
+      maxWait: 15,
+    });
+
+    expect(estimate.transferMode).toBe("fast");
+    expect(estimate.fastAvailable).toBe(true);
+  });
 });
