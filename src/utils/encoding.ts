@@ -27,30 +27,28 @@ export function stellarAddressToBytes32(address: string): `0x${string}` {
 /**
  * Inverse of stellarAddressToBytes32 for ed25519 public keys (G... accounts).
  *
- * Validates that input is an 0x-prefixed, 32-byte (64 hex characters), even-length
- * hexadecimal string before decoding.
+ * Accepts a 0x-prefixed 64-character hex string (32 bytes) and returns the
+ * corresponding Stellar G... strkey. The full 32-byte value is passed directly
+ * to StrKey.encodeEd25519PublicKey -- no truncation, no left-padding, no
+ * right-padding. For a value that was produced by stellarAddressToBytes32
+ * (which left-pads a 32-byte key), the round-trip is exact:
  *
- * Contract (C...) strkey behavior:
- * Contract addresses (C...) also encode to 32 raw bytes, but raw bytes32 payloads
- * carry no strkey version/discriminator byte. This function strictly decodes ed25519
- * public keys (G...). To decode a contract bytes32 back to a C... strkey, callers
- * should use `StrKey.encodeContract(Buffer.from(hex, "hex"))`.
+ *   stellarAddressToBytes32(addr) → bytes32ToStellarAddress(...) === addr
+ *
+ * For a 32-byte C... contract address (not a valid ed25519 public key),
+ * StrKey.encodeEd25519PublicKey will throw because the checksum/version byte
+ * doesn't match the ed25519 curve prefix. Use stellarAddressToBytes32 for
+ * contract addresses -- the inverse is not supported here.
  */
+const BYTES32_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+
 export function bytes32ToStellarAddress(bytes32: `0x${string}`): string {
-  if (typeof bytes32 !== "string" || !bytes32.startsWith("0x")) {
-    throw new Error(`Invalid bytes32 hex string: missing 0x prefix: ${bytes32}`);
+  if (!BYTES32_PATTERN.test(bytes32)) {
+    throw new Error(
+      `bytes32ToStellarAddress: expected a 0x-prefixed 64-character hex string (32 bytes), got: ${bytes32}`,
+    );
   }
-  const hex = bytes32.slice(2);
-  if (hex.length % 2 !== 0) {
-    throw new Error(`Invalid bytes32 hex string: odd length (${hex.length} hex chars): ${bytes32}`);
-  }
-  if (hex.length !== 64) {
-    throw new Error(`Invalid bytes32 length: expected 64 hex characters (32 bytes), got ${hex.length}: ${bytes32}`);
-  }
-  if (!/^[0-9a-fA-F]+$/.test(hex)) {
-    throw new Error(`Invalid bytes32 hex string: contains non-hexadecimal characters: ${bytes32}`);
-  }
-  const raw = Buffer.from(hex, "hex");
+  const raw = Buffer.from(bytes32.slice(2), "hex");
   return StrKey.encodeEd25519PublicKey(raw);
 }
 
