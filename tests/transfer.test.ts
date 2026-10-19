@@ -764,6 +764,92 @@ describe("resolveBurn", () => {
   });
 });
 
+describe("transfer amount precision validation", () => {
+  it("rejects Stellar->Arc amount with precision exceeding Arc's 6 decimals", async () => {
+    await expect(
+      transfer({
+        from: "stellar",
+        to: "arc",
+        amount: "1.1234567",
+        recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        speed: "standard",
+        signer: stellarSigner,
+        options: { destinationSigner: arcSigner },
+      }),
+    ).rejects.toThrow(
+      /exceeds.*destination chain.*decimals/i,
+    );
+    expect(burnUsdcOnStellar).not.toHaveBeenCalled();
+    expect(approveUsdcOnStellar).not.toHaveBeenCalled();
+  });
+
+  it("accepts Stellar->Arc amount with exactly 6 decimals", async () => {
+    const result = await transfer({
+      from: "stellar",
+      to: "arc",
+      amount: "1.123456",
+      recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      speed: "standard",
+      signer: stellarSigner,
+      options: { destinationSigner: arcSigner },
+    });
+    expect(result.status).toBe("success");
+    expect(burnUsdcOnStellar).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Arc->Stellar amount exceeding source Arc's 6 decimals", async () => {
+    await expect(
+      transfer({
+        from: "arc",
+        to: "stellar",
+        amount: "1.1234567",
+        recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+        speed: "standard",
+        signer: arcSigner,
+        options: { destinationSigner: stellarSigner },
+      }),
+    ).rejects.toThrow(/more precision than 6 decimals/);
+    expect(burnUsdcOnArcWithStellarForward).not.toHaveBeenCalled();
+    expect(approveUsdcOnArc).not.toHaveBeenCalled();
+  });
+
+  it("accepts Arc->Stellar amount within Arc's 6 decimals", async () => {
+    const result = await transfer({
+      from: "arc",
+      to: "stellar",
+      amount: "1.123456",
+      recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
+      speed: "standard",
+      signer: arcSigner,
+      options: { destinationSigner: stellarSigner },
+    });
+    expect(result.status).toBe("success");
+    expect(burnUsdcOnArcWithStellarForward).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws descriptive error mentioning the amount and destination decimals", async () => {
+    let caught: unknown;
+    try {
+      await transfer({
+        from: "stellar",
+        to: "arc",
+        amount: "1.1234567",
+        recipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        speed: "standard",
+        signer: stellarSigner,
+        options: { destinationSigner: arcSigner },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain("1.1234567");
+    expect(message).toContain("6");
+    expect(message.toLowerCase()).toContain("arc");
+  });
+});
+
 describe("transfer fast/standard fee handling", () => {
   it("falls back to standard when the quoted fast fee exceeds maxFee", async () => {
     fetchFastTransferFeeBps.mockResolvedValue(100); // 1% - exceeds maxFee below
