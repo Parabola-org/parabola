@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const approveUsdcOnArc = vi.fn();
+const getUsdcAllowanceOnArc = vi.fn();
 const burnUsdcOnArc = vi.fn();
 const burnUsdcOnArcWithStellarForward = vi.fn();
 const receiveMessageOnArc = vi.fn();
@@ -15,6 +16,7 @@ const getAttestation = vi.fn();
 
 vi.mock("../src/chains/arc.js", () => ({
   approveUsdcOnArc: (...args: unknown[]) => approveUsdcOnArc(...args),
+  getUsdcAllowanceOnArc: (...args: unknown[]) => getUsdcAllowanceOnArc(...args),
   burnUsdcOnArc: (...args: unknown[]) => burnUsdcOnArc(...args),
   burnUsdcOnArcWithStellarForward: (...args: unknown[]) => burnUsdcOnArcWithStellarForward(...args),
   receiveMessageOnArc: (...args: unknown[]) => receiveMessageOnArc(...args),
@@ -71,6 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getUsdcAllowanceOnArc.mockResolvedValue(0n);
   approveUsdcOnArc.mockResolvedValue("0xapprovehash");
+  getUsdcAllowanceOnArc.mockResolvedValue(0n);
   burnUsdcOnArc.mockResolvedValue("0xburnhash");
   burnUsdcOnArcWithStellarForward.mockResolvedValue("0xburnhookhash");
   approveUsdcOnStellar.mockResolvedValue("stellarapprovehash");
