@@ -235,12 +235,28 @@ export interface EstimateFeeParams {
   maxWait?: number;
   /** Which deployment to quote against. Default "mainnet". */
   network?: Network;
+  /**
+   * Max USDC fee tolerated for a fast transfer. When the quoted fee exceeds this,
+   * the estimate reports fast as unavailable (mirrors transfer() fallback).
+   */
+  maxFee?: string;
+  /**
+   * Max seconds to wait before falling back to standard transfer. When the fast
+   * estimate exceeds this, the estimate reports fast as unavailable (mirrors
+   * transfer() fallback).
+   */
+  maxWait?: number;
 }
 
 export interface FeeEstimate {
   protocolFee: string;
   estimatedDurationSeconds: number;
   transferMode: TransferMode;
+  /**
+   * True when fast transfer is available given the quoted fee and the caller's
+   * maxFee/maxWait constraints. Always true for standard-speed estimates.
+   */
+  fastAvailable: boolean;
 }
 
 /**
