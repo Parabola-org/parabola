@@ -623,4 +623,33 @@ footer .foot-brand {
   .problem-item:hover {
     transform: none;
   }
+  .line {
+    will-change: auto;
+  }
+  .pos-word {
+    will-change: auto;
+  }
+  .flow-progress-fill {
+    transform: scaleX(1);
+  }
+  .hero-anim-line,
+  .hero-anim {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  #problem .problem-item,
+  #problem .section-head,
+  #how-it-works .section-head,
+  .flow-node .stage-label,
+  .flow-node .fn,
+  .flow-node p {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  pre.code-block .code-line {
+    clip-path: none !important;
+  }
+  .type-cursor {
+    opacity: 0 !important;
+  }
 }
