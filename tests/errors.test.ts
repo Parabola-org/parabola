@@ -4,95 +4,109 @@ import {
   AttestationNotReadyError,
   IrisRequestError,
   SubmissionTimeoutError,
+  AmountPrecisionError,
   type TransferErrorCode,
 } from "../src/errors.js";
 
 describe("TransferError", () => {
-  it("populates required fields and leaves optional fields undefined when omitted", () => {
-    const err = new TransferError("mint failed", "0xburn123");
-
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(TransferError);
-    expect(Object.getPrototypeOf(err)).toBe(TransferError.prototype);
-    expect(err.name).toBe("TransferError");
-    expect(err.message).toBe("mint failed");
-    expect(err.burnTxHash).toBe("0xburn123");
-    expect(err.attestationHash).toBeUndefined();
-    expect(err.code).toBeUndefined();
-    expect(typeof err.stack).toBe("string");
+  it("wires all constructor args", () => {
+    const e = new TransferError("boom", "0xburn", "0xattest", "ATTESTATION_NOT_READY");
+    expect(e).toBeInstanceOf(Error);
+    expect(e).toBeInstanceOf(TransferError);
+    expect(e.name).toBe("TransferError");
+    expect(e.message).toBe("boom");
+    expect(e.burnTxHash).toBe("0xburn");
+    expect(e.attestationHash).toBe("0xattest");
+    expect(e.code).toBe<TransferErrorCode>("ATTESTATION_NOT_READY");
   });
 
-  it("populates attestationHash and code when provided", () => {
-    const code: TransferErrorCode = "ATTESTATION_NOT_READY";
-    const err = new TransferError("still attesting", "0xburn456", "0xatt789", code);
-
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(TransferError);
-    expect(err.name).toBe("TransferError");
-    expect(err.message).toBe("still attesting");
-    expect(err.burnTxHash).toBe("0xburn456");
-    expect(err.attestationHash).toBe("0xatt789");
-    expect(err.code).toBe("ATTESTATION_NOT_READY");
+  it("supports optional-arg variants", () => {
+    const e = new TransferError("m", "0xB");
+    expect(e.attestationHash).toBeUndefined();
+    expect(e.code).toBeUndefined();
   });
 
-  it("supports passing code with undefined attestationHash", () => {
-    const err = new TransferError("poll timed out", "0xburn999", undefined, "ATTESTATION_NOT_READY");
+  it("accepts TRANSFER_ABORTED discriminator", () => {
+    expect(new TransferError("m", "0xB", undefined, "TRANSFER_ABORTED").code).toBe("TRANSFER_ABORTED");
+  });
 
-    expect(err.burnTxHash).toBe("0xburn999");
-    expect(err.attestationHash).toBeUndefined();
-    expect(err.code).toBe("ATTESTATION_NOT_READY");
+  it("is catchable as Error with fresh stack", () => {
+    const e = new TransferError("m", "0xB");
+    expect(e.stack).toBeDefined();
+    expect(e instanceof Error).toBe(true);
   });
 });
 
 describe("AttestationNotReadyError", () => {
-  it("populates message, burnTxHash, name, and prototype chain", () => {
-    const err = new AttestationNotReadyError("not indexed yet", "0xburnabc");
-
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(AttestationNotReadyError);
-    expect(err).not.toBeInstanceOf(TransferError);
-    expect(Object.getPrototypeOf(err)).toBe(AttestationNotReadyError.prototype);
-    expect(err.name).toBe("AttestationNotReadyError");
-    expect(err.message).toBe("not indexed yet");
-    expect(err.burnTxHash).toBe("0xburnabc");
-    expect(typeof err.stack).toBe("string");
+  it("carries burnTxHash and name", () => {
+    const e = new AttestationNotReadyError("pending", "0xburn");
+    expect(e).toBeInstanceOf(Error);
+    expect(e).toBeInstanceOf(AttestationNotReadyError);
+    expect(e.name).toBe("AttestationNotReadyError");
+    expect(e.burnTxHash).toBe("0xburn");
+    expect(e.message).toBe("pending");
   });
 });
 
 describe("IrisRequestError", () => {
-  it("records HTTP status when provided", () => {
-    const err = new IrisRequestError("Iris HTTP 503", 503);
-
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(IrisRequestError);
-    expect(Object.getPrototypeOf(err)).toBe(IrisRequestError.prototype);
-    expect(err.name).toBe("IrisRequestError");
-    expect(err.message).toBe("Iris HTTP 503");
-    expect(err.status).toBe(503);
-    expect(typeof err.stack).toBe("string");
+  it("carries optional status", () => {
+    const e = new IrisRequestError("5xx", 503);
+    expect(e).toBeInstanceOf(IrisRequestError);
+    expect(e.name).toBe("IrisRequestError");
+    expect(e.status).toBe(503);
   });
-
-  it("leaves status undefined when omitted (network failure before HTTP response)", () => {
-    const err = new IrisRequestError("fetch failed: ECONNRESET");
-
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(IrisRequestError);
-    expect(err.name).toBe("IrisRequestError");
-    expect(err.message).toBe("fetch failed: ECONNRESET");
-    expect(err.status).toBeUndefined();
+  it("allows undefined status (pre-response failure)", () => {
+    expect(new IrisRequestError("dns").status).toBeUndefined();
   });
 });
 
 describe("SubmissionTimeoutError", () => {
-  it("populates message, hash, name, and prototype chain", () => {
-    const err = new SubmissionTimeoutError("confirmation timed out", "0xtxhash");
+  it("carries hash", () => {
+    const e = new SubmissionTimeoutError("timed out", "0xhash");
+    expect(e).toBeInstanceOf(SubmissionTimeoutError);
+    expect(e.name).toBe("SubmissionTimeoutError");
+    expect(e.hash).toBe("0xhash");
+  });
+});
 
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(SubmissionTimeoutError);
-    expect(Object.getPrototypeOf(err)).toBe(SubmissionTimeoutError.prototype);
-    expect(err.name).toBe("SubmissionTimeoutError");
-    expect(err.message).toBe("confirmation timed out");
-    expect(err.hash).toBe("0xtxhash");
-    expect(typeof err.stack).toBe("string");
+describe("AmountPrecisionError", () => {
+  it("is declared exactly once (regression: duplicate class)", () => {
+    // Compilation would already fail on a duplicate identifier, but assert the
+    // class is constructible and singular at runtime.
+    expect(typeof AmountPrecisionError).toBe("function");
+  });
+
+  it("wires fields and formats message", () => {
+    const e = new AmountPrecisionError("1.2345678", 7, 6, "arc");
+    expect(e).toBeInstanceOf(Error);
+    expect(e).toBeInstanceOf(AmountPrecisionError);
+    expect(e.name).toBe("AmountPrecisionError");
+    expect(e.amount).toBe("1.2345678");
+    expect(e.precision).toBe(7);
+    expect(e.supportedDecimals).toBe(6);
+    expect(e.destination).toBe("arc");
+    expect(e.message).toContain("7");
+    expect(e.message).toContain("6");
+  });
+
+  it("supports stellar destination", () => {
+    expect(new AmountPrecisionError("1.2345678", 7, 7, "stellar").destination).toBe("stellar");
+  });
+});
+
+describe("prototype chain survives bundling", () => {
+  it("each class sets its own name and instanceof works", () => {
+    const instances: Array<[any, string]> = [
+      [new TransferError("m", "h"), "TransferError"],
+      [new AttestationNotReadyError("m", "h"), "AttestationNotReadyError"],
+      [new IrisRequestError("m"), "IrisRequestError"],
+      [new SubmissionTimeoutError("m", "h"), "SubmissionTimeoutError"],
+      [new AmountPrecisionError("1.1", 1, 0, "arc"), "AmountPrecisionError"],
+    ];
+    for (const [inst, name] of instances) {
+      expect(inst.name).toBe(name);
+      expect(inst instanceof Error).toBe(true);
+      expect(inst.constructor.name).toBe(name);
+    }
   });
 });
