@@ -146,28 +146,6 @@ async function writeAndWait(
 }
 
 /**
- * Reads the current USDC allowance granted by `owner` to TokenMessengerV2 on Arc.
- * Returns 0n if the read fails so callers fail closed and still submit the exact-amount approve.
- */
-export async function getUsdcAllowanceOnArc(
-  owner: Hex,
-  network: Network,
-  rpcUrl?: string,
-): Promise<bigint> {
-  const arc = arcConfig(network);
-  try {
-    return await publicClient(network, rpcUrl).readContract({
-      address: arc.usdc as Hex,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [owner, arc.tokenMessengerV2 as Hex],
-    });
-  } catch {
-    return 0n;
-  }
-}
-
-/**
  * Approves the TokenMessengerV2 contract to spend USDC on the signer's behalf,
  * skipping the on-chain write when the existing allowance already covers `amountRaw`.
  */
@@ -216,12 +194,18 @@ export async function getUsdcAllowanceOnArc(
     owner = account.address;
   }
   const arc = arcConfig(network);
-  return publicClient(network, rpcUrl).readContract({
-    address: arc.usdc as Hex,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: [owner, arc.tokenMessengerV2 as Hex],
-  });
+  try {
+    return await publicClient(network, rpcUrl).readContract({
+      address: arc.usdc as Hex,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [owner, arc.tokenMessengerV2 as Hex],
+    });
+  } catch {
+    // Fail closed: treat an unreadable allowance as zero so callers still submit
+    // the exact-amount approve rather than skipping it and failing the burn later.
+    return 0n;
+  }
 }
 
 /** Burns USDC on Arc via TokenMessengerV2.depositForBurn for a plain (non-Stellar) destination. */
